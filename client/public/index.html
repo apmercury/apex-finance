@@ -369,8 +369,19 @@
           </div>
 
           <div class="form-group">
-            <label class="form-label">Notes</label>
-            <textarea class="form-control" id="pay-notes" rows="2" placeholder="Payment remarks..."></textarea>
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+              <label class="form-label" style="margin-bottom: 0;">Payment Note / Remarks</label>
+              <span style="font-size: 11px; color: var(--text-muted, #64748b);">Quick presets:</span>
+            </div>
+            <div style="display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px;">
+              <button type="button" class="btn btn-secondary btn-xs btn-pay-preset" data-note="50% installment payment" data-split="0.5" title="Set 50% amount and note" style="padding: 2px 8px; font-size: 11px; border-radius: 12px; background: rgba(99,102,241,0.08); border-color: rgba(99,102,241,0.2); color: #4f46e5;">⚡ 50% Half Payment</button>
+              <button type="button" class="btn btn-secondary btn-xs btn-pay-preset" data-note="Partial installment payment against balance" title="Partial installment note" style="padding: 2px 8px; font-size: 11px; border-radius: 12px;">⚡ Partial Installment</button>
+              <button type="button" class="btn btn-secondary btn-xs btn-pay-preset" data-note="Milestone progress payment" title="Milestone note" style="padding: 2px 8px; font-size: 11px; border-radius: 12px;">⚡ Milestone Progress</button>
+              <button type="button" class="btn btn-secondary btn-xs btn-pay-preset" data-note="Final settlement of invoice balance" data-split="1.0" title="Set full remaining balance and note" style="padding: 2px 8px; font-size: 11px; border-radius: 12px; background: rgba(16,185,129,0.08); border-color: rgba(16,185,129,0.2); color: #059669;">⚡ Full Settlement</button>
+              <button type="button" class="btn btn-secondary btn-xs btn-pay-preset" data-note="Direct bank transfer remittance" style="padding: 2px 8px; font-size: 11px; border-radius: 12px;">⚡ Bank Remittance</button>
+              <button type="button" class="btn btn-secondary btn-xs btn-pay-preset" data-note="Mobile Money remittance" style="padding: 2px 8px; font-size: 11px; border-radius: 12px;">⚡ MoMo Transfer</button>
+            </div>
+            <textarea class="form-control" id="pay-notes" rows="2" placeholder="Payment remarks or click a quick preset above..."></textarea>
           </div>
 
           <!-- Administrator Overpayment Bypass (shown only when overpaying) -->
@@ -432,9 +443,27 @@
               <input type="text" class="form-control" id="client-tax-id" placeholder="TIN-001293">
             </div>
           </div>
-          <div class="form-group">
-            <label class="form-label">Address</label>
-            <input type="text" class="form-control" id="client-address" placeholder="Physical or billing address">
+          <div class="form-row">
+            <div class="form-group">
+              <label class="form-label">Country</label>
+              <select class="form-control" id="client-country">
+                <option value="Ghana" selected>Ghana</option>
+                <option value="Nigeria">Nigeria</option>
+                <option value="Kenya">Kenya</option>
+                <option value="South Africa">South Africa</option>
+                <option value="United States">United States</option>
+                <option value="United Kingdom">United Kingdom</option>
+                <option value="Canada">Canada</option>
+                <option value="Germany">Germany</option>
+                <option value="France">France</option>
+                <option value="United Arab Emirates">United Arab Emirates</option>
+                <option value="Other">Other Country</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Address</label>
+              <input type="text" class="form-control" id="client-address" placeholder="Physical or billing address">
+            </div>
           </div>
         </form>
       </div>
@@ -571,7 +600,36 @@
             </div>
             <div class="form-group">
               <label class="form-label">Country *</label>
-              <input type="text" class="form-control" id="onboard-country" required value="United States" placeholder="e.g. United States, Ghana, Germany">
+              <select class="form-control" id="onboard-country" required>
+                <option value="Ghana" selected>Ghana</option>
+                <option value="United States">United States</option>
+                <option value="United Kingdom">United Kingdom</option>
+                <option value="Nigeria">Nigeria</option>
+                <option value="Kenya">Kenya</option>
+                <option value="South Africa">South Africa</option>
+                <option value="Canada">Canada</option>
+                <option value="Germany">Germany</option>
+                <option value="France">France</option>
+                <option value="United Arab Emirates">United Arab Emirates</option>
+                <option value="Singapore">Singapore</option>
+                <option value="Australia">Australia</option>
+                <option value="China">China</option>
+                <option value="India">India</option>
+                <option value="Brazil">Brazil</option>
+                <option value="Japan">Japan</option>
+                <option value="Netherlands">Netherlands</option>
+                <option value="Switzerland">Switzerland</option>
+                <option value="Spain">Spain</option>
+                <option value="Italy">Italy</option>
+                <option value="Egypt">Egypt</option>
+                <option value="Morocco">Morocco</option>
+                <option value="Rwanda">Rwanda</option>
+                <option value="Ivory Coast">Ivory Coast</option>
+                <option value="Senegal">Senegal</option>
+                <option value="Tanzania">Tanzania</option>
+                <option value="Uganda">Uganda</option>
+                <option value="Other">Other Country</option>
+              </select>
             </div>
           </div>
 

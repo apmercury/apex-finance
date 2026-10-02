@@ -1785,9 +1785,19 @@ async function renderSettings(container) {
           </div>
         </div>
 
-        <div class="form-group">
-          <label class="form-label">Address</label>
-          <input type="text" class="form-control" id="set-company-address" value="${company.address || ''}">
+        <div class="form-row">
+          <div class="form-group">
+            <label class="form-label">Country</label>
+            <select class="form-control" id="set-company-country">
+              ${['Ghana', 'Nigeria', 'Kenya', 'South Africa', 'United States', 'United Kingdom', 'Canada', 'Germany', 'France', 'United Arab Emirates', 'Other'].map(cn => `
+                <option value="${cn}" ${(company.country || 'Ghana') === cn ? 'selected' : ''}>${cn}</option>
+              `).join('')}
+            </select>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Address</label>
+            <input type="text" class="form-control" id="set-company-address" value="${company.address || ''}">
+          </div>
         </div>
 
         <div class="form-group">
@@ -1843,7 +1853,7 @@ async function renderSettings(container) {
     </div>
 
     <!-- Tax Rates Table -->
-    <div class="table-container" style="padding: 28px;">
+    <div class="table-container" style="padding: 28px; margin-bottom: 28px;">
       <h3 style="font-size: 16px; font-weight: 700; color: #0f172a; margin-bottom: 4px;">Configurable Taxes</h3>
       <p style="font-size: 12px; color: #64748b; margin-bottom: 16px;">Applied flexibly across individual invoice line items</p>
 
@@ -1870,6 +1880,23 @@ async function renderSettings(container) {
         </tbody>
       </table>
     </div>
+
+    <!-- Danger Zone: Delete Workspace -->
+    ${(state.user.role === 'Administrator' || state.user.isSuperAdmin) ? `
+      <div class="table-container" style="padding: 28px; border: 1px solid #fecaca; background: #fffafb;">
+        <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 20px; flex-wrap: wrap;">
+          <div>
+            <h3 style="font-size: 16px; font-weight: 700; color: #dc2626; margin-bottom: 4px;">Danger Zone: Delete Workspace</h3>
+            <p style="font-size: 12px; color: #64748b; line-height: 1.5; max-width: 600px;">
+              Permanently delete <strong>${company.name}</strong>, including all its invoices, payments, client records, and audit history. This action is irreversible.
+            </p>
+          </div>
+          <button id="btn-delete-workspace" class="btn btn-secondary" style="color: #dc2626; border-color: #fca5a5; background: #fee2e2; font-weight: 700;">
+            Delete Company Workspace
+          </button>
+        </div>
+      </div>
+    ` : ''}
   `;
 
   document.getElementById('form-company-settings').addEventListener('submit', async (e) => {
@@ -1883,10 +1910,14 @@ async function renderSettings(container) {
           email: document.getElementById('set-company-email').value,
           phone: document.getElementById('set-company-phone').value,
           invoice_prefix: document.getElementById('set-company-prefix').value,
+          country: document.getElementById('set-company-country').value,
           address: document.getElementById('set-company-address').value,
           payment_instructions: document.getElementById('set-company-instructions').value
         })
       });
+      if (state.company) {
+        state.company.country = document.getElementById('set-company-country').value;
+      }
       showToast('Company profile updated!', 'success');
     } catch (err) {
       showToast(err.message, 'error');
@@ -1901,12 +1932,46 @@ async function renderSettings(container) {
         const currData = await api('/currencies');
         state.currencies = currData.currencies;
         state.baseCurrency = currData.baseCurrency;
+        if (state.company) {
+          state.company.default_currency = btn.dataset.code;
+        }
+        updateSidebarUser();
+        updateCompanySwitcher();
         renderSettings(container);
       } catch (err) {
         showToast(err.message, 'error');
       }
     });
   });
+
+  const btnDelWorkspace = document.getElementById('btn-delete-workspace');
+  if (btnDelWorkspace) {
+    btnDelWorkspace.addEventListener('click', async () => {
+      const confirmInput = prompt(`⚠️ WARNING: This will permanently delete the entire company workspace "${company.name}", all invoices, payments, and accounting records.\n\nTo confirm, type the exact company name below:`);
+      if (confirmInput !== company.name) {
+        if (confirmInput !== null) {
+          showToast('Company name did not match. Workspace deletion cancelled.', 'info');
+        }
+        return;
+      }
+
+      try {
+        await api(`/companies/${company.id}`, { method: 'DELETE' });
+        showToast(`Workspace "${company.name}" has been deleted.`, 'success');
+        const myComps = await api('/companies/my-companies');
+        state.myCompanies = myComps;
+        if (myComps.length > 0) {
+          await switchCompany(myComps[0].id);
+        } else {
+          localStorage.clear();
+          sessionStorage.clear();
+          window.location.reload();
+        }
+      } catch (err) {
+        showToast(err.message, 'error');
+      }
+    });
+  }
 }
 
 // ============================================================================
@@ -2127,6 +2192,9 @@ async function renderPlatform(container) {
                   <button class="btn btn-secondary btn-sm btn-toggle-status" data-company-id="${c.id}" data-current-status="${c.status}" style="color: ${c.status === 'active' ? '#ef4444' : '#16a34a'}; border-color: ${c.status === 'active' ? '#fecaca' : '#bbf7d0'};">
                     ${c.status === 'active' ? 'Suspend' : 'Activate'}
                   </button>
+                  <button class="btn btn-secondary btn-sm btn-delete-platform-company" data-company-id="${c.id}" data-name="${c.name}" style="color: #dc2626; border-color: #fca5a5; background: #fee2e2;" title="Permanently delete company">
+                    Delete
+                  </button>
                 </div>
               </td>
             </tr>
@@ -2164,6 +2232,34 @@ async function renderPlatform(container) {
       }
     });
   });
+
+  // Permanently delete company (Platform Superadmin)
+  container.querySelectorAll('.btn-delete-platform-company').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const cid = btn.dataset.companyId;
+      const cname = btn.dataset.name;
+      if (!confirm(`⚠️ Are you sure you want to permanently DELETE company "${cname}" (${cid})?\n\nThis will purge all invoices, payments, client records, and transaction history. This cannot be undone.`)) return;
+      try {
+        await api(`/platform/companies/${cid}`, { method: 'DELETE' });
+        showToast(`Company "${cname}" deleted successfully`, 'success');
+        if (state.company && state.company.id === cid) {
+          const myComps = await api('/companies/my-companies');
+          state.myCompanies = myComps;
+          if (myComps.length > 0) {
+            await switchCompany(myComps[0].id);
+          } else {
+            localStorage.clear();
+            sessionStorage.clear();
+            window.location.reload();
+            return;
+          }
+        }
+        await renderPlatform(container);
+      } catch (err) {
+        showToast(err.message, 'error');
+      }
+    });
+  });
 }
 
 // ============================================================================
@@ -2183,9 +2279,13 @@ async function openCreateInvoiceModal() {
   const clientSel = document.getElementById('inv-client');
   clientSel.innerHTML = clients.map(c => `<option value="${c.id}" data-currency="${c.preferred_currency}">${c.company_name} (${c.preferred_currency})</option>`).join('');
 
+  // Default currency: Company base currency or selected client's preferred currency
+  const baseDefault = state.company?.default_currency || state.baseCurrency?.code || 'GHS';
+  const initialPreferred = clients[0]?.preferred_currency || baseDefault;
+
   // Populate Currencies
   const currSel = document.getElementById('inv-currency');
-  currSel.innerHTML = currData.currencies.map(c => `<option value="${c.code}" ${c.code === 'USD' ? 'selected' : ''}>${c.code} — ${c.name}</option>`).join('');
+  currSel.innerHTML = currData.currencies.map(c => `<option value="${c.code}" ${c.code === initialPreferred ? 'selected' : ''}>${c.code} — ${c.name}</option>`).join('');
 
   // Populate Templates
   const tplSel = document.getElementById('inv-template');
@@ -2206,11 +2306,9 @@ async function openCreateInvoiceModal() {
   updateInvoiceExchangeRate();
   clientSel.onchange = () => {
     const selected = clientSel.options[clientSel.selectedIndex];
-    const preferred = selected.dataset.currency;
-    if (preferred) {
-      currSel.value = preferred;
-      updateInvoiceExchangeRate();
-    }
+    const preferred = selected?.dataset?.currency;
+    currSel.value = preferred || (state.company?.default_currency || state.baseCurrency?.code || 'GHS');
+    updateInvoiceExchangeRate();
   };
   currSel.onchange = updateInvoiceExchangeRate;
 
@@ -2392,15 +2490,20 @@ async function openRecordPaymentModal(options = {}) {
     const invSel = document.getElementById('pay-invoice');
     const eligible = state.invoices.filter(i => i.client_id === cId && i.balance_due > 0);
 
+    const baseFallback = state.company?.default_currency || state.baseCurrency?.code || 'GHS';
     if (eligible.length === 0) {
       invSel.innerHTML = '<option value="">No outstanding invoices for this client</option>';
       document.getElementById('pay-invoice-info').style.display = 'none';
+      document.getElementById('pay-currency').value = baseFallback;
+      document.getElementById('pay-amount').value = '0.00';
+      const preview = document.getElementById('pay-progress-preview');
+      if (preview) preview.style.display = 'none';
       return;
     }
 
     invSel.innerHTML = eligible.map(i => `
-      <option value="${i.id}" data-total="${i.total_amount}" data-balance="${i.balance_due}" data-paid="${i.amount_paid}" data-currency="${i.currency}" data-due="${i.due_date}">
-        ${i.invoice_number} — Total: ${formatMoney(i.total_amount, i.currency)} | Balance Due: ${formatMoney(i.balance_due, i.currency)}
+      <option value="${i.id}" data-total="${i.total_amount}" data-balance="${i.balance_due}" data-paid="${i.amount_paid}" data-currency="${i.currency || baseFallback}" data-due="${i.due_date}">
+        ${i.invoice_number} — Total: ${formatMoney(i.total_amount, i.currency || baseFallback)} | Balance Due: ${formatMoney(i.balance_due, i.currency || baseFallback)}
       </option>
     `).join('');
 
@@ -2423,18 +2526,23 @@ function updatePaymentInvoiceInfo() {
   const infoBox = document.getElementById('pay-invoice-info');
   const currInput = document.getElementById('pay-currency');
   const amountInput = document.getElementById('pay-amount');
+  const baseFallback = state.company?.default_currency || state.baseCurrency?.code || 'GHS';
 
   if (!invSel.value) {
     infoBox.style.display = 'none';
-    currInput.value = '';
+    currInput.value = baseFallback;
     return;
   }
 
   const opt = invSel.options[invSel.selectedIndex];
-  const balance = parseFloat(opt.dataset.balance);
-  const total = parseFloat(opt.dataset.total);
-  const paid = parseFloat(opt.dataset.paid);
-  const curr = opt.dataset.currency;
+  if (!opt) {
+    currInput.value = baseFallback;
+    return;
+  }
+  const balance = parseFloat(opt.dataset.balance) || 0;
+  const total = parseFloat(opt.dataset.total) || 0;
+  const paid = parseFloat(opt.dataset.paid) || 0;
+  const curr = opt.dataset.currency || baseFallback;
 
   currInput.value = curr;
   amountInput.value = balance.toFixed(2); // Pre-fill with remaining balance due
@@ -2543,7 +2651,8 @@ document.getElementById('btn-confirm-reversal').addEventListener('click', async 
 // 4. Add Client Modal
 async function openAddClientModal() {
   const currSel = document.getElementById('client-currency');
-  currSel.innerHTML = state.currencies.map(c => `<option value="${c.code}" ${c.code === 'USD' ? 'selected' : ''}>${c.code} (${c.symbol})</option>`).join('');
+  const baseDefault = state.company?.default_currency || state.baseCurrency?.code || 'GHS';
+  currSel.innerHTML = state.currencies.map(c => `<option value="${c.code}" ${c.code === baseDefault ? 'selected' : ''}>${c.code} (${c.symbol})</option>`).join('');
   document.getElementById('modal-client').classList.add('open');
 }
 
@@ -2560,6 +2669,7 @@ document.getElementById('form-client').addEventListener('submit', async (e) => {
         preferred_currency: document.getElementById('client-currency').value,
         payment_terms: parseInt(document.getElementById('client-terms').value, 10),
         tax_id: document.getElementById('client-tax-id').value,
+        country: document.getElementById('client-country')?.value || 'Ghana',
         address: document.getElementById('client-address').value
       })
     });
@@ -2724,6 +2834,31 @@ function setupEventListeners() {
   // Quick Action Buttons
   document.getElementById('btn-quick-invoice').addEventListener('click', openCreateInvoiceModal);
   document.getElementById('btn-quick-payment').addEventListener('click', () => openRecordPaymentModal());
+
+  // Payment Note Quick Presets & Auto-Splits
+  document.querySelectorAll('.btn-pay-preset').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const note = btn.dataset.note;
+      const split = btn.dataset.split ? parseFloat(btn.dataset.split) : null;
+      const noteEl = document.getElementById('pay-notes');
+      if (noteEl) {
+        noteEl.value = note;
+      }
+      if (split !== null) {
+        const invSel = document.getElementById('pay-invoice');
+        const opt = invSel?.options[invSel.selectedIndex];
+        if (opt && opt.dataset.balance) {
+          const balance = parseFloat(opt.dataset.balance) || 0;
+          const targetAmount = Math.max(0, balance * split);
+          const amtEl = document.getElementById('pay-amount');
+          if (amtEl) {
+            amtEl.value = targetAmount.toFixed(2);
+            updatePaymentProgressSimulation();
+          }
+        }
+      }
+    });
+  });
 
   // Notifications Bell toggle
   const btnNotif = document.getElementById('btn-notifications');
