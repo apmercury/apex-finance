@@ -5,6 +5,8 @@ import { TaxService } from './taxService.ts';
 import { TemplateService } from './templateService.ts';
 import { AuditService } from './auditService.ts';
 import * as crypto from 'node:crypto';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 
 export interface CompanyOnboardInput {
   name: string;
@@ -473,5 +475,60 @@ export class CompanyService {
     });
 
     return queryOne(`SELECT * FROM companies WHERE id = ?`, [companyId]);
+  }
+
+  /**
+   * Delete a company workspace and all associated tenant records
+   */
+  public static deleteCompany(companyId: string, actor: { userId: string; userName: string; isSuperAdmin: boolean }): boolean {
+    return runTransaction(() => {
+      const company = queryOne<{ id: string; name: string }>(`SELECT id, name FROM companies WHERE id = ?`, [companyId]);
+      if (!company) throw new Error('Company workspace not found');
+
+      // Check permissions: Actor must be platform superadmin or Administrator in that company
+      if (!actor.isSuperAdmin) {
+        const membership = queryOne<{ role_name: string }>(
+          `SELECT r.name as role_name FROM company_users cu
+           JOIN roles r ON cu.role_id = r.id
+           WHERE cu.user_id = ? AND cu.company_id = ? AND cu.is_active = 1`,
+          [actor.userId, companyId]
+        );
+        if (!membership || membership.role_name !== 'Administrator') {
+          throw new Error('Only Company Administrators or Platform Superadmins can delete a company');
+        }
+      }
+
+      // Safeguard: Never delete the last remaining company in the entire platform
+      const totalCount = queryOne<{ count: number }>(`SELECT COUNT(*) as count FROM companies`);
+      if ((totalCount?.count || 0) <= 1) {
+        throw new Error('Cannot delete the only remaining company in the system');
+      }
+
+      // Cascade deletion across tenant tables
+      execute(`DELETE FROM payment_allocations WHERE payment_id IN (SELECT id FROM payments WHERE company_id = ?)`, [companyId]);
+      execute(`DELETE FROM payments WHERE company_id = ?`, [companyId]);
+      execute(`DELETE FROM invoice_items WHERE invoice_id IN (SELECT id FROM invoices WHERE company_id = ?)`, [companyId]);
+      execute(`DELETE FROM invoices WHERE company_id = ?`, [companyId]);
+      execute(`DELETE FROM clients WHERE company_id = ?`, [companyId]);
+      execute(`DELETE FROM expenses WHERE company_id = ?`, [companyId]);
+      execute(`DELETE FROM expense_categories WHERE company_id = ?`, [companyId]);
+      execute(`DELETE FROM revenues WHERE company_id = ?`, [companyId]);
+      execute(`DELETE FROM transactions WHERE company_id = ?`, [companyId]);
+      execute(`DELETE FROM tax_rates WHERE company_id = ?`, [companyId]);
+      execute(`DELETE FROM invoice_templates WHERE company_id = ?`, [companyId]);
+      execute(`DELETE FROM exchange_rates WHERE company_id = ?`, [companyId]);
+      execute(`DELETE FROM notifications WHERE company_id = ?`, [companyId]);
+      execute(`DELETE FROM company_users WHERE company_id = ?`, [companyId]);
+      execute(`DELETE FROM audit_logs WHERE company_id = ?`, [companyId]);
+      execute(`DELETE FROM companies WHERE id = ?`, [companyId]);
+
+      // Remove storage files if existing
+      const companyStorage = path.join(process.cwd(), 'storage', companyId);
+      if (fs.existsSync(companyStorage)) {
+        try { fs.rmSync(companyStorage, { recursive: true, force: true }); } catch {}
+      }
+
+      return true;
+    });
   }
 }

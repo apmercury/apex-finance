@@ -316,6 +316,42 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
     return true;
   }
 
+  if (pathname.match(/^\/api\/platform\/companies\/([A-Za-z0-9_-]+)$/) && method === 'DELETE') {
+    if (!auth.isSuperAdmin) {
+      sendJson(res, 403, { error: 'Platform Administrator access required' });
+      return true;
+    }
+    const targetCompId = pathname.split('/')[4];
+    try {
+      CompanyService.deleteCompany(targetCompId, {
+        userId: auth.userId,
+        userName: auth.fullName,
+        isSuperAdmin: true
+      });
+      sendJson(res, 200, { success: true, message: 'Company workspace deleted successfully' });
+      return true;
+    } catch (e: any) {
+      sendJson(res, 400, { error: e.message });
+      return true;
+    }
+  }
+
+  if (pathname.match(/^\/api\/companies\/([A-Za-z0-9_-]+)$/) && method === 'DELETE') {
+    const targetCompId = pathname.split('/')[3];
+    try {
+      CompanyService.deleteCompany(targetCompId, {
+        userId: auth.userId,
+        userName: auth.fullName,
+        isSuperAdmin: auth.isSuperAdmin
+      });
+      sendJson(res, 200, { success: true, message: 'Company workspace deleted successfully' });
+      return true;
+    } catch (e: any) {
+      sendJson(res, 400, { error: e.message });
+      return true;
+    }
+  }
+
   // --- 4. COMPANY PROFILE & SETTINGS ---
   if (pathname === '/api/company' && method === 'GET') {
     const company = queryOne(`SELECT * FROM companies WHERE id = ?`, [companyId]);
