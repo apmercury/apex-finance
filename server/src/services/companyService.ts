@@ -3,6 +3,7 @@ import { hashPassword, createToken } from '../utils/security.ts';
 import { CurrencyService } from './currencyService.ts';
 import { TaxService } from './taxService.ts';
 import { TemplateService } from './templateService.ts';
+import { PaymentNoteService } from './paymentNoteService.ts';
 import { AuditService } from './auditService.ts';
 import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
@@ -252,6 +253,9 @@ export class CompanyService {
         payment_instructions: data.payment_instructions || 'Please remit payment as indicated on invoice.',
         custom_notes: `Thank you for your business with ${data.name.trim()}!`
       });
+
+      // 8. Payment Note Templates (System Defaults)
+      PaymentNoteService.ensureDefaults(companyId);
 
       const newCompany = queryOne(`SELECT * FROM companies WHERE id = ?`, [companyId]);
 
@@ -518,6 +522,7 @@ export class CompanyService {
       execute(`DELETE FROM invoice_templates WHERE company_id = ?`, [companyId]);
       execute(`DELETE FROM exchange_rates WHERE company_id = ?`, [companyId]);
       execute(`DELETE FROM notifications WHERE company_id = ?`, [companyId]);
+      execute(`DELETE FROM payment_note_templates WHERE company_id = ?`, [companyId]);
       execute(`DELETE FROM company_users WHERE company_id = ?`, [companyId]);
       execute(`DELETE FROM audit_logs WHERE company_id = ?`, [companyId]);
       execute(`DELETE FROM companies WHERE id = ?`, [companyId]);

@@ -15,6 +15,7 @@ import { RevenueService } from '../services/revenueService.ts';
 import { ReportService } from '../services/reportService.ts';
 import { DashboardService } from '../services/dashboardService.ts';
 import { TemplateService } from '../services/templateService.ts';
+import { PaymentNoteService } from '../services/paymentNoteService.ts';
 import { PdfService } from '../services/pdfService.ts';
 import { NotificationService } from '../services/notificationService.ts';
 import { AuditService } from '../services/auditService.ts';
@@ -999,6 +1000,36 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
     const q = (query.q as string) || '';
     sendJson(res, 200, SearchService.globalSearch(companyId, q));
     return true;
+  }
+
+  // --- 18. PAYMENT NOTE TEMPLATES & PRESETS ---
+  if (pathname === '/api/payment-notes' && method === 'GET') {
+    sendJson(res, 200, PaymentNoteService.getNotes(companyId));
+    return true;
+  }
+
+  if (pathname === '/api/payment-notes' && method === 'POST') {
+    try {
+      const body = await parseBody(req);
+      const note = PaymentNoteService.createNote(companyId, body);
+      sendJson(res, 201, note);
+      return true;
+    } catch (e: any) {
+      sendJson(res, 400, { error: e.message });
+      return true;
+    }
+  }
+
+  if (pathname.match(/^\/api\/payment-notes\/([A-Za-z0-9_-]+)$/) && method === 'DELETE') {
+    const noteId = pathname.split('/')[3];
+    try {
+      PaymentNoteService.deleteNote(companyId, noteId);
+      sendJson(res, 200, { success: true, message: 'Payment note template deleted' });
+      return true;
+    } catch (e: any) {
+      sendJson(res, 400, { error: e.message });
+      return true;
+    }
   }
 
   // Route not handled by API

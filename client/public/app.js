@@ -2471,6 +2471,83 @@ document.getElementById('form-invoice').addEventListener('submit', async (e) => 
   }
 });
 
+// Payment Note Presets & Custom Note Templates
+async function loadPaymentNotes() {
+  const container = document.getElementById('pay-notes-chips-container');
+  const select = document.getElementById('pay-notes-template-select');
+  if (!container || !select) return;
+
+  try {
+    const notes = await api('/payment-notes');
+    state.paymentNotes = notes;
+
+    select.innerHTML = '<option value="">-- Load Saved Note --</option>' +
+      notes.map(n => `<option value="${n.id}" data-content="${encodeURIComponent(n.content)}" data-split="${n.split_ratio ?? ''}">${!n.is_system ? '⭐ ' : ''}${n.title}</option>`).join('');
+
+    container.innerHTML = notes.map(n => {
+      const isCustom = !n.is_system;
+      const splitBadge = n.split_ratio ? `(${Math.round(n.split_ratio * 100)}%) ` : '';
+      return `
+        <span class="btn-pay-preset-wrap" style="display: inline-flex; align-items: center; border-radius: 12px; background: ${isCustom ? '#ecfdf5' : 'rgba(99,102,241,0.08)'}; border: 1px solid ${isCustom ? '#a7f3d0' : 'rgba(99,102,241,0.2)'}; padding: 2px 8px; font-size: 11px;">
+          <button type="button" class="btn-pay-preset-action" data-note="${encodeURIComponent(n.content)}" data-split="${n.split_ratio ?? ''}" style="background: none; border: none; padding: 0; color: ${isCustom ? '#047857' : '#4f46e5'}; font-weight: 600; cursor: pointer; font-size: 11px;">
+            ${isCustom ? '⭐ ' : '⚡ '}${splitBadge}${n.title}
+          </button>
+          ${isCustom ? `<span class="btn-delete-saved-note" data-id="${n.id}" data-title="${n.title}" title="Delete this custom preset" style="margin-left: 6px; cursor: pointer; color: #ef4444; font-weight: bold; font-size: 13px; line-height: 1;">&times;</span>` : ''}
+        </span>
+      `;
+    }).join('');
+
+    // Attach click events on chips
+    container.querySelectorAll('.btn-pay-preset-action').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const note = decodeURIComponent(btn.dataset.note);
+        const split = btn.dataset.split ? parseFloat(btn.dataset.split) : null;
+        applyPaymentNote(note, split);
+      });
+    });
+
+    // Attach delete events for custom notes
+    container.querySelectorAll('.btn-delete-saved-note').forEach(btn => {
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const id = btn.dataset.id;
+        const title = btn.dataset.title;
+        if (!confirm(`Delete saved note preset "${title}"?`)) return;
+        try {
+          await api(`/payment-notes/${id}`, { method: 'DELETE' });
+          showToast(`Saved note "${title}" deleted`, 'info');
+          await loadPaymentNotes();
+        } catch (err) {
+          showToast(err.message, 'error');
+        }
+      });
+    });
+
+  } catch (err) {
+    console.error('Failed to load payment notes', err);
+  }
+}
+
+function applyPaymentNote(noteText, splitRatio = null) {
+  const noteEl = document.getElementById('pay-notes');
+  if (noteEl) {
+    noteEl.value = noteText;
+  }
+  if (splitRatio !== null && !isNaN(splitRatio)) {
+    const invSel = document.getElementById('pay-invoice');
+    const opt = invSel?.options[invSel.selectedIndex];
+    if (opt && opt.dataset.balance) {
+      const balance = parseFloat(opt.dataset.balance) || 0;
+      const targetAmount = Math.max(0, balance * splitRatio);
+      const amtEl = document.getElementById('pay-amount');
+      if (amtEl) {
+        amtEl.value = targetAmount.toFixed(2);
+        updatePaymentProgressSimulation();
+      }
+    }
+  }
+}
+
 // 2. Record Payment Modal
 async function openRecordPaymentModal(options = {}) {
   const [clients, invoices] = await Promise.all([
@@ -2479,6 +2556,9 @@ async function openRecordPaymentModal(options = {}) {
   ]);
   state.clients = clients;
   state.invoices = invoices;
+
+  // Load custom and default payment note presets
+  await loadPaymentNotes();
 
   const clientSel = document.getElementById('pay-client');
   clientSel.innerHTML = clients.map(c => `<option value="${c.id}">${c.company_name}</option>`).join('');
@@ -2835,30 +2915,46 @@ function setupEventListeners() {
   document.getElementById('btn-quick-invoice').addEventListener('click', openCreateInvoiceModal);
   document.getElementById('btn-quick-payment').addEventListener('click', () => openRecordPaymentModal());
 
-  // Payment Note Quick Presets & Auto-Splits
-  document.querySelectorAll('.btn-pay-preset').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const note = btn.dataset.note;
-      const split = btn.dataset.split ? parseFloat(btn.dataset.split) : null;
-      const noteEl = document.getElementById('pay-notes');
-      if (noteEl) {
-        noteEl.value = note;
+  // Payment Note Template Selector
+  const selNote = document.getElementById('pay-notes-template-select');
+  if (selNote) {
+    selNote.addEventListener('change', () => {
+      const opt = selNote.options[selNote.selectedIndex];
+      if (!opt || !opt.value) return;
+      const content = decodeURIComponent(opt.dataset.content || '');
+      const split = opt.dataset.split ? parseFloat(opt.dataset.split) : null;
+      applyPaymentNote(content, split);
+    });
+  }
+
+  // Button: Save Current Note As Preset
+  const btnSaveCustomNote = document.getElementById('btn-save-custom-note');
+  if (btnSaveCustomNote) {
+    btnSaveCustomNote.addEventListener('click', async () => {
+      const content = document.getElementById('pay-notes')?.value?.trim();
+      if (!content) {
+        showToast('Please type a note in the remarks box first to save it', 'warning');
+        return;
       }
-      if (split !== null) {
-        const invSel = document.getElementById('pay-invoice');
-        const opt = invSel?.options[invSel.selectedIndex];
-        if (opt && opt.dataset.balance) {
-          const balance = parseFloat(opt.dataset.balance) || 0;
-          const targetAmount = Math.max(0, balance * split);
-          const amtEl = document.getElementById('pay-amount');
-          if (amtEl) {
-            amtEl.value = targetAmount.toFixed(2);
-            updatePaymentProgressSimulation();
-          }
-        }
+      const defaultTitle = content.slice(0, 24) + (content.length > 24 ? '...' : '');
+      const title = prompt('Enter a short name/label for this saved note preset:', defaultTitle);
+      if (!title || !title.trim()) return;
+
+      try {
+        await api('/payment-notes', {
+          method: 'POST',
+          body: JSON.stringify({
+            title: title.trim(),
+            content: content
+          })
+        });
+        showToast(`Saved note "${title.trim()}"!`, 'success');
+        await loadPaymentNotes();
+      } catch (err) {
+        showToast(err.message, 'error');
       }
     });
-  });
+  }
 
   // Notifications Bell toggle
   const btnNotif = document.getElementById('btn-notifications');
