@@ -366,6 +366,17 @@ export function initDatabase() {
       UNIQUE (company_id, setting_key)
     );
 
+    -- 23. Payment Note Templates (Customizable notes and split presets)
+    CREATE TABLE IF NOT EXISTS payment_note_templates (
+      id TEXT PRIMARY KEY,
+      company_id TEXT NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+      title TEXT NOT NULL,
+      content TEXT NOT NULL,
+      split_ratio REAL DEFAULT NULL,
+      is_system INTEGER DEFAULT 0,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    );
+
     -- Ensure default user placeholder exists for default unauthenticated API operations
     INSERT OR IGNORE INTO users (id, email, password_hash, salt, full_name, is_superadmin, status)
     VALUES ('u_admin_default', 'admin@apexfin.com', 'seeded', 'seeded', 'Alexander Vance (Admin)', 1, 'active');

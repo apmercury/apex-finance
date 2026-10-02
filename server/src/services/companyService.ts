@@ -3,6 +3,7 @@ import { hashPassword, createToken } from '../utils/security.ts';
 import { CurrencyService } from './currencyService.ts';
 import { TaxService } from './taxService.ts';
 import { TemplateService } from './templateService.ts';
+import { PaymentNoteService } from './paymentNoteService.ts';
 import { AuditService } from './auditService.ts';
 import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';

@@ -363,3 +363,16 @@ CREATE TABLE company_settings (
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     UNIQUE (company_id, setting_key)
 );
+
+-- 23. Payment Note Templates (Customizable notes and split presets)
+CREATE TABLE payment_note_templates (
+    id VARCHAR(36) PRIMARY KEY,
+    company_id VARCHAR(36) NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+    title VARCHAR(255) NOT NULL,
+    content TEXT NOT NULL,
+    split_ratio NUMERIC(5, 2) DEFAULT NULL,
+    is_system BOOLEAN DEFAULT FALSE,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX idx_payment_note_templates_company ON payment_note_templates (company_id);
+

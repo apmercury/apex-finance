@@ -2471,6 +2471,88 @@ document.getElementById('form-invoice').addEventListener('submit', async (e) => 
   }
 });
 
+// Payment Note Presets & Custom Note Templates
+async function loadPaymentNotes() {
+  const container = document.getElementById('pay-notes-chips-container');
+  const select = document.getElementById('pay-notes-template-select');
+  if (!container || !select) return;
+
+  try {
+    const notes = await api('/payment-notes');
+    state.paymentNotes = notes;
+
+    if (!notes || notes.length === 0) {
+      select.innerHTML = '<option value="">-- No saved notes yet --</option>';
+      container.innerHTML = '<span style="font-size: 11px; color: #94a3b8; font-style: italic;">No saved notes yet. Type a note in the box below and click "Save Note As Preset" to save it for later use.</span>';
+      return;
+    }
+
+    select.innerHTML = '<option value="">-- Load Saved Note --</option>' +
+      notes.map(n => `<option value="${n.id}" data-content="${encodeURIComponent(n.content)}" data-split="${n.split_ratio ?? ''}">📝 ${n.title}</option>`).join('');
+
+    container.innerHTML = notes.map(n => {
+      const splitBadge = n.split_ratio ? `(${Math.round(n.split_ratio * 100)}%) ` : '';
+      return `
+        <span class="btn-pay-preset-wrap" style="display: inline-flex; align-items: center; border-radius: 12px; background: #f0fdf4; border: 1px solid #bbf7d0; padding: 2px 8px; font-size: 11px;">
+          <button type="button" class="btn-pay-preset-action" data-note="${encodeURIComponent(n.content)}" data-split="${n.split_ratio ?? ''}" style="background: none; border: none; padding: 0; color: #15803d; font-weight: 600; cursor: pointer; font-size: 11px;">
+            📝 ${splitBadge}${n.title}
+          </button>
+          <span class="btn-delete-saved-note" data-id="${n.id}" data-title="${n.title}" title="Delete this saved note" style="margin-left: 6px; cursor: pointer; color: #ef4444; font-weight: bold; font-size: 13px; line-height: 1;">&times;</span>
+        </span>
+      `;
+    }).join('');
+
+    // Attach click events on chips
+    container.querySelectorAll('.btn-pay-preset-action').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const note = decodeURIComponent(btn.dataset.note);
+        const split = btn.dataset.split ? parseFloat(btn.dataset.split) : null;
+        applyPaymentNote(note, split);
+      });
+    });
+
+    // Attach delete events for custom notes
+    container.querySelectorAll('.btn-delete-saved-note').forEach(btn => {
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const id = btn.dataset.id;
+        const title = btn.dataset.title;
+        if (!confirm(`Delete saved note preset "${title}"?`)) return;
+        try {
+          await api(`/payment-notes/${id}`, { method: 'DELETE' });
+          showToast(`Saved note "${title}" deleted`, 'info');
+          await loadPaymentNotes();
+        } catch (err) {
+          showToast(err.message, 'error');
+        }
+      });
+    });
+
+  } catch (err) {
+    console.error('Failed to load payment notes', err);
+  }
+}
+
+function applyPaymentNote(noteText, splitRatio = null) {
+  const noteEl = document.getElementById('pay-notes');
+  if (noteEl) {
+    noteEl.value = noteText;
+  }
+  if (splitRatio !== null && !isNaN(splitRatio)) {
+    const invSel = document.getElementById('pay-invoice');
+    const opt = invSel?.options[invSel.selectedIndex];
+    if (opt && opt.dataset.balance) {
+      const balance = parseFloat(opt.dataset.balance) || 0;
+      const targetAmount = Math.max(0, balance * splitRatio);
+      const amtEl = document.getElementById('pay-amount');
+      if (amtEl) {
+        amtEl.value = targetAmount.toFixed(2);
+        updatePaymentProgressSimulation();
+      }
+    }
+  }
+}
+
 // 2. Record Payment Modal
 async function openRecordPaymentModal(options = {}) {
   const [clients, invoices] = await Promise.all([
@@ -2479,6 +2561,9 @@ async function openRecordPaymentModal(options = {}) {
   ]);
   state.clients = clients;
   state.invoices = invoices;
+
+  // Load custom and default payment note presets
+  await loadPaymentNotes();
 
   const clientSel = document.getElementById('pay-client');
   clientSel.innerHTML = clients.map(c => `<option value="${c.id}">${c.company_name}</option>`).join('');
