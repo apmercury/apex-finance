@@ -9,6 +9,7 @@ export interface TokenPayload {
   role: string;
   companyId: string;
   companyName: string;
+  isSuperAdmin?: boolean;
 }
 
 /**

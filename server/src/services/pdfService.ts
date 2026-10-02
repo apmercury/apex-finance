@@ -1,11 +1,7 @@
 import { InvoiceService } from './invoiceService.ts';
-import { TemplateService, InvoiceTemplate } from './templateService.ts';
+import { TemplateService, type InvoiceTemplate } from './templateService.ts';
 import { SafeMoney } from '../utils/financialMath.ts';
 import { queryOne } from '../db/database.ts';
-import * as fs from 'node:fs';
-import * as path from 'node:path';
-import { execFileSync } from 'node:child_process';
-
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { execFileSync } from 'node:child_process';
@@ -370,13 +366,13 @@ export class PdfService {
 
   public static generateInvoicePdf(companyId: string, invoiceId: string): string {
     const html = this.renderInvoiceHtml(companyId, invoiceId);
-    const outputPath = path.join(process.cwd(), 'storage', 'invoices', `invoice_${invoiceId}.pdf`);
+    const outputPath = path.join(process.cwd(), 'storage', companyId, 'invoices', `invoice_${invoiceId}.pdf`);
     return this.generatePdfFromHtml(html, outputPath);
   }
 
   public static generateReceiptPdf(companyId: string, paymentId: string): string {
     const html = this.renderReceiptHtml(companyId, paymentId);
-    const outputPath = path.join(process.cwd(), 'storage', 'receipts', `receipt_${paymentId}.pdf`);
+    const outputPath = path.join(process.cwd(), 'storage', companyId, 'receipts', `receipt_${paymentId}.pdf`);
     return this.generatePdfFromHtml(html, outputPath);
   }
 }

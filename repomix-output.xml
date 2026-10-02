@@ -75,21 +75,13 @@ server/
       security.ts
     index.ts
 storage/
-  invoices/
-    invoice_0139e283-1600-42b6-b639-e038deb02004.pdf
-    invoice_1a63716a-edf3-43fb-acc4-a1b26e7bcaef.pdf
-    invoice_d2e478d5-18a6-4984-99a2-96f9eb28f187.pdf
-    invoice_d6236d70-d562-4f53-9a5f-e615e657a0c3.pdf
-  receipts/
-    receipt_86e7c9c0-8f13-4e79-b4a5-26499e7b7098.pdf
-  apexfinance.sqlite
   apexfinance.sqlite-shm
   apexfinance.sqlite-wal
-  dashboard_rendered.png
-  mobile_rendered.png
 tests/
   e2e_full_suite.ts
   test_scenario_39.ts
+.gitignore
+1
 package.json
 README.md
 </directory_structure>
@@ -9136,6 +9128,15 @@ assert(dash.summary.totalRevenue.value > 0, 'Dashboard total revenue is populate
 console.log('Dashboard Total Revenue:', dash.summary.totalRevenue.value);
 
 console.log('\n>>> CRITICAL TEST SCENARIO 39 PASSED COMPLETELY AND FLAWLESSLY! <<<');
+</file>
+
+<file path=".gitignore">
+.DS_Store
+node_modules/
+</file>
+
+<file path="1">
+.DS_Store
 </file>
 
 <file path="package.json">

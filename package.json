@@ -1,4 +1,16 @@
 {
+  "name": "apex-finance",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "node --experimental-strip-types server/src/index.ts",
+    "start": "node --experimental-strip-types server/src/index.ts",
+    "seed": "node --experimental-strip-types server/src/db/seed.ts",
+    "test": "node --experimental-strip-types tests/test_scenario_39.ts",
+    "test:scenario39": "node --experimental-strip-types tests/test_scenario_39.ts",
+    "test:e2e": "node --experimental-strip-types tests/e2e_full_suite.ts",
+    "test:security": "node --experimental-strip-types tests/multi_tenant_security_test.ts"
+  },
   "dependencies": {
     "@sparticuz/chromium": "^153.0.0",
     "puppeteer-core": "^25.12.0"

@@ -1,4 +1,4 @@
-import { initDatabase, db, queryOne, execute } from './database.ts';
+import { initDatabase, db, queryOne, queryAll, execute } from './database.ts';
 import { hashPassword } from '../utils/security.ts';
 import { CurrencyService } from '../services/currencyService.ts';
 import { TaxService } from '../services/taxService.ts';
@@ -15,7 +15,7 @@ export function seedDemoData() {
   // Check if company exists
   const existingCompany = queryOne(`SELECT id FROM companies LIMIT 1`);
   if (existingCompany) {
-    console.log('Database already seeded. Skipping.');
+    seedPermissionsAndSecondCompany();
     return existingCompany.id;
   }
 
@@ -387,8 +387,261 @@ export function seedDemoData() {
     user_name: 'Ama Osei'
   });
 
+  seedPermissionsAndSecondCompany();
+
   console.log('Seed demo data completed successfully!');
   return companyId;
+}
+
+export function seedPermissionsAndSecondCompany() {
+  // 1. Roles & Permissions
+  const roles = queryAll(`SELECT id, name FROM roles`);
+  let adminRole = roles.find(r => r.name === 'Administrator');
+  let financeRole = roles.find(r => r.name === 'Finance Manager');
+  let staffRole = roles.find(r => r.name === 'Staff');
+
+  if (!adminRole) {
+    const id = crypto.randomUUID();
+    execute(`INSERT INTO roles (id, name, description) VALUES (?, 'Administrator', 'Full system access')`, [id]);
+    adminRole = { id, name: 'Administrator' };
+  }
+  if (!financeRole) {
+    const id = crypto.randomUUID();
+    execute(`INSERT INTO roles (id, name, description) VALUES (?, 'Finance Manager', 'Finance, billing, payments, analytics access')`, [id]);
+    financeRole = { id, name: 'Finance Manager' };
+  }
+  if (!staffRole) {
+    const id = crypto.randomUUID();
+    execute(`INSERT INTO roles (id, name, description) VALUES (?, 'Staff', 'Limited operational access')`, [id]);
+    staffRole = { id, name: 'Staff' };
+  }
+
+  const standardPermissions = [
+    { name: 'companies:read', resource: 'companies', action: 'read', description: 'View company settings' },
+    { name: 'companies:write', resource: 'companies', action: 'write', description: 'Update company settings' },
+    { name: 'users:read', resource: 'users', action: 'read', description: 'View company users' },
+    { name: 'users:invite', resource: 'users', action: 'invite', description: 'Invite users to company' },
+    { name: 'users:manage', resource: 'users', action: 'manage', description: 'Manage user roles and remove users' },
+    { name: 'clients:read', resource: 'clients', action: 'read', description: 'View clients' },
+    { name: 'clients:write', resource: 'clients', action: 'write', description: 'Create and update clients' },
+    { name: 'clients:delete', resource: 'clients', action: 'delete', description: 'Delete or archive clients' },
+    { name: 'invoices:read', resource: 'invoices', action: 'read', description: 'View invoices' },
+    { name: 'invoices:write', resource: 'invoices', action: 'write', description: 'Create and send invoices' },
+    { name: 'invoices:delete', resource: 'invoices', action: 'delete', description: 'Cancel or delete invoices' },
+    { name: 'payments:read', resource: 'payments', action: 'read', description: 'View payments' },
+    { name: 'payments:write', resource: 'payments', action: 'write', description: 'Record payments' },
+    { name: 'payments:reverse', resource: 'payments', action: 'reverse', description: 'Reverse payments' },
+    { name: 'payments:override_overpayment', resource: 'payments', action: 'override_overpayment', description: 'Authorize overpayment' },
+    { name: 'expenses:read', resource: 'expenses', action: 'read', description: 'View expenses' },
+    { name: 'expenses:write', resource: 'expenses', action: 'write', description: 'Record expenses' },
+    { name: 'expenses:delete', resource: 'expenses', action: 'delete', description: 'Delete expenses' },
+    { name: 'revenue:read', resource: 'revenue', action: 'read', description: 'View revenue streams' },
+    { name: 'reports:read', resource: 'reports', action: 'read', description: 'View financial reports' },
+    { name: 'templates:read', resource: 'templates', action: 'read', description: 'View invoice templates' },
+    { name: 'templates:write', resource: 'templates', action: 'write', description: 'Modify invoice templates' },
+    { name: 'audit:read', resource: 'audit', action: 'read', description: 'View audit logs' }
+  ];
+
+  for (const p of standardPermissions) {
+    const existing = queryOne(`SELECT id FROM permissions WHERE name = ?`, [p.name]);
+    const permId = existing ? existing.id : crypto.randomUUID();
+    if (!existing) {
+      execute(`INSERT INTO permissions (id, name, resource, action, description) VALUES (?, ?, ?, ?, ?)`,
+        [permId, p.name, p.resource, p.action, p.description]);
+    }
+    execute(`INSERT OR IGNORE INTO role_permissions (role_id, permission_id) VALUES (?, ?)`, [adminRole.id, permId]);
+    if (!['companies:write', 'users:manage', 'clients:delete', 'expenses:delete', 'templates:write'].includes(p.name)) {
+      execute(`INSERT OR IGNORE INTO role_permissions (role_id, permission_id) VALUES (?, ?)`, [financeRole.id, permId]);
+    }
+    if (['clients:read', 'invoices:read', 'payments:read', 'expenses:read', 'expenses:write', 'reports:read'].includes(p.name)) {
+      execute(`INSERT OR IGNORE INTO role_permissions (role_id, permission_id) VALUES (?, ?)`, [staffRole.id, permId]);
+    }
+  }
+
+  // 2. Check Second Company
+  const comp2Id = 'comp_stellar_02';
+  const existingComp2 = queryOne(`SELECT id FROM companies WHERE id = ?`, [comp2Id]);
+  if (!existingComp2) {
+    execute(
+      `INSERT INTO companies (
+        id, name, business_registration_number, tax_identification_number, address,
+        country, state, city, phone, email, website, default_currency, fiscal_year_start,
+        invoice_prefix, invoice_number_format, default_payment_terms, bank_details,
+        payment_instructions, primary_color, secondary_color, invoice_theme, status, subscription_plan
+      ) VALUES (
+        ?, 'Stellar Maritime & Logistics LLC', 'DE-CORP-48821', 'US-EIN-12938471',
+        'Pier 39, Embarcadero Way', 'United States', 'California', 'San Francisco',
+        '+1 415 882 1000', 'billing@stellarmaritime.com', 'https://stellarmaritime.com', 'USD', '01-01',
+        'STM-', 'STM-{YYYY}-{SEQ:4}', 30,
+        '{"bank_name":"JPMorgan Chase Bank","account_name":"Stellar Maritime & Logistics LLC","account_number":"4492810029","routing_number":"021000021"}',
+        'Wire transfer remittance to JPMorgan Chase Bank. Quote invoice number on payment.',
+        '#0d9488', '#0f172a', 'corporate', 'active', 'enterprise'
+      )`,
+      [comp2Id]
+    );
+
+    // Users
+    const sarahCred = hashPassword('sarah123');
+    let sarahUser = queryOne(`SELECT id FROM users WHERE email = 'sarah@stellarmaritime.com'`);
+    if (!sarahUser) {
+      const sId = crypto.randomUUID();
+      execute(
+        `INSERT INTO users (id, email, password_hash, salt, full_name, is_superadmin, status)
+         VALUES (?, 'sarah@stellarmaritime.com', ?, ?, 'Sarah Jenkins (Director)', 0, 'active')`,
+        [sId, sarahCred.hash, sarahCred.salt]
+      );
+      sarahUser = { id: sId };
+    }
+
+    // Sarah is Administrator of Company 2
+    execute(
+      `INSERT OR IGNORE INTO company_users (id, company_id, user_id, role_id, is_active, invitation_status, joined_at)
+       VALUES (?, ?, ?, ?, 1, 'accepted', datetime('now'))`,
+      [crypto.randomUUID(), comp2Id, sarahUser.id, adminRole.id]
+    );
+
+    // Alexander Vance (Admin of Company 1) is Finance Manager of Company 2!
+    const alexUser = queryOne(`SELECT id FROM users WHERE email = 'admin@apexfin.com'`);
+    if (alexUser) {
+      execute(
+        `INSERT OR IGNORE INTO company_users (id, company_id, user_id, role_id, is_active, invitation_status, joined_at)
+         VALUES (?, ?, ?, ?, 1, 'accepted', datetime('now'))`,
+        [crypto.randomUUID(), comp2Id, alexUser.id, financeRole.id]
+      );
+    }
+
+    // Currencies for Company 2
+    const currenciesComp2 = [
+      { code: 'USD', name: 'US Dollar', symbol: '$', is_base: 1, precision: 2 },
+      { code: 'EUR', name: 'Euro', symbol: '€', is_base: 0, precision: 2 },
+      { code: 'GBP', name: 'British Pound', symbol: '£', is_base: 0, precision: 2 },
+      { code: 'SGD', name: 'Singapore Dollar', symbol: 'S$', is_base: 0, precision: 2 }
+    ];
+    for (const c of currenciesComp2) {
+      execute(
+        `INSERT OR IGNORE INTO currencies (id, company_id, code, name, symbol, decimal_precision, is_active, is_base)
+         VALUES (?, ?, ?, ?, ?, ?, 1, ?)`,
+        [crypto.randomUUID(), comp2Id, c.code, c.name, c.symbol, c.precision, c.is_base]
+      );
+    }
+
+    CurrencyService.addExchangeRate(comp2Id, { from_currency: 'EUR', to_currency: 'USD', rate: 1.08, effective_date: new Date().toISOString().slice(0, 10), source: 'Fed Fixing' });
+    CurrencyService.addExchangeRate(comp2Id, { from_currency: 'GBP', to_currency: 'USD', rate: 1.28, effective_date: new Date().toISOString().slice(0, 10), source: 'Fed Fixing' });
+
+    // Tax Rates
+    TaxService.createTaxRate(comp2Id, { name: 'US State Sales Tax', code: 'SALES-8', percentage: 8.25, description: 'California State Tax' });
+    TaxService.createTaxRate(comp2Id, { name: 'Exempt Port Surcharge', code: 'EXEMPT-0', percentage: 0.0, description: 'International Waters Freight' });
+
+    // Expense Categories
+    const categoriesComp2 = ['Vessel Fuel & Bunkers', 'Port & Dockage Fees', 'Crew Payroll', 'Equipment Maintenance', 'Marine Insurance'];
+    for (const cat of categoriesComp2) {
+      execute(
+        `INSERT OR IGNORE INTO expense_categories (id, company_id, name, description, is_system)
+         VALUES (?, ?, ?, ?, 1)`,
+        [crypto.randomUUID(), comp2Id, cat, cat]
+      );
+    }
+
+    // Template
+    TemplateService.createTemplate(comp2Id, {
+      name: 'Maritime Slate (Default)',
+      is_default: true,
+      primary_color: '#0d9488',
+      secondary_color: '#0f172a',
+      font_family: 'Roboto, sans-serif',
+      layout_style: 'corporate',
+      payment_instructions: 'Payment terms net 30 via JPMorgan Chase wire transfer.',
+      custom_notes: 'Stellar Maritime appreciates your maritime partnership.'
+    });
+
+    // Clients
+    const clientPacific = ClientService.createClient(comp2Id, {
+      company_name: 'Pacific Freightways Corp',
+      contact_person: 'Captain Robert Vance',
+      email: 'logistics@pacificfreight.com',
+      phone: '+1 206 555 0142',
+      address: 'Port of Seattle Pier 66, Seattle, WA',
+      country: 'United States',
+      tax_id: 'US-WA-992810',
+      preferred_currency: 'USD',
+      payment_terms: 30
+    }, sarahUser.id, 'Sarah Jenkins');
+
+    const clientTokyo = ClientService.createClient(comp2Id, {
+      company_name: 'Tokyo Marine Lines KK',
+      contact_person: 'Kenji Takahashi',
+      email: 'finance@tokyomarine.jp',
+      phone: '+81 3 5555 0199',
+      address: 'Chiyoda-ku, Tokyo, Japan',
+      country: 'Japan',
+      tax_id: 'JP-TIN-881920',
+      preferred_currency: 'USD',
+      payment_terms: 45
+    }, sarahUser.id, 'Sarah Jenkins');
+
+    // Invoices for Company 2
+    const inv1 = InvoiceService.createInvoice({
+      company_id: comp2Id,
+      client_id: clientPacific.id,
+      issue_date: '2026-08-10',
+      due_date: '2026-09-10',
+      currency: 'USD',
+      exchange_rate: 1.0,
+      items: [
+        { description: 'Trans-Pacific Container Freight Charter (40ft High Cube x 10)', quantity: 10, unit_price: 2500 }
+      ],
+      notes: 'Completed vessel voyage V-408',
+      user_id: sarahUser.id,
+      user_name: 'Sarah Jenkins'
+    });
+
+    PaymentService.recordPayment({
+      company_id: comp2Id,
+      client_id: clientPacific.id,
+      invoice_id: inv1.id,
+      amount: 25000,
+      currency: 'USD',
+      exchange_rate: 1.0,
+      payment_date: '2026-08-25',
+      payment_method: 'Bank Transfer',
+      reference_number: 'JPMC-WIRE-99210',
+      notes: 'Settled in full via wire',
+      user_id: sarahUser.id,
+      user_name: 'Sarah Jenkins',
+      user_role: 'Administrator'
+    });
+
+    InvoiceService.createInvoice({
+      company_id: comp2Id,
+      client_id: clientTokyo.id,
+      issue_date: '2026-09-15',
+      due_date: '2026-10-30',
+      currency: 'USD',
+      exchange_rate: 1.0,
+      items: [
+        { description: 'Harbor Tug Assist & Pilotage Services', quantity: 2, unit_price: 7250 }
+      ],
+      notes: 'Berthing and departure escort services',
+      user_id: sarahUser.id,
+      user_name: 'Sarah Jenkins'
+    });
+
+    const bunkerCat = queryOne(`SELECT id FROM expense_categories WHERE company_id = ? AND name = 'Vessel Fuel & Bunkers'`, [comp2Id]);
+    ExpenseService.createExpense({
+      company_id: comp2Id,
+      category_id: bunkerCat?.id,
+      vendor: 'Chevron Marine Fuel Supply',
+      description: 'Low-Sulfur Marine Gas Oil (LSMGO) 25 Metric Tons',
+      amount: 14200,
+      currency: 'USD',
+      exchange_rate: 1.0,
+      expense_date: '2026-09-02',
+      payment_method: 'Bank Transfer',
+      reference_number: 'CHV-MGO-8819',
+      user_id: sarahUser.id,
+      user_name: 'Sarah Jenkins'
+    });
+  }
 }
 
 if (process.argv[1]?.endsWith('seed.ts')) {

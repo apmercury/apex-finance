@@ -110,11 +110,44 @@ The application was verified against the scenario specified in Requirement 39:
    * Client statement recorded 1 invoice and 3 payments with closing balance `0.00`.
    * Audit trail logged `INVOICE_CREATED` and 3 `PAYMENT_RECORDED` entries.
 
-To run this test scenario at any time:
+---
+
+## Multi-Tenant SaaS Architecture & Security
+
+ApexFinance features **hardened multi-tenancy** enforced at both backend and database layers:
+
+1. **Strict Context Resolution**:
+   - The backend `getAuthContext(req)` extracts and verifies JWT Bearer tokens.
+   - Company membership is checked against `company_users` on every API request.
+   - Client-supplied `?companyId=...` query parameters are **never trusted** for data scoping.
+2. **Tenant-Isolated Storage**:
+   - Generated vector PDFs are stored in tenant-isolated directories: `storage/${companyId}/invoices/` and `storage/${companyId}/receipts/`.
+3. **Multi-Company Memberships & Instant Switching**:
+   - Single users can belong to multiple distinct companies with different roles in each (e.g. Administrator in Company A, Finance Manager in Company B).
+   - Instant workspace switching via `POST /api/auth/switch-company` reissues cryptographically signed tenant tokens and refreshes company-specific currencies, tax rates, and real-time SSE channels.
+4. **Self-Service Company Onboarding**:
+   - Users can create new company workspaces on the fly via `POST /api/companies/onboard` with custom base currencies, legal details, and branding. The creator is automatically provisioned as Company Administrator.
+5. **Team Management & Role-Based Access Control (RBAC)**:
+   - Built-in roles: `Administrator`, `Finance Manager`, `Staff`.
+   - Granular permissions govern sensitive actions (e.g., modifying company settings, deleting client records, reversing payments, and inviting team members).
+6. **Platform Administration (Superadmin)**:
+   - Cross-tenant dashboard (`/api/platform/companies`) to view tenant statistics and toggle company activation (`active` / `suspended`).
+
+---
+
+## Test Suites & Verification
+
+ApexFinance includes a full battery of automated tests covering mathematical precision, multi-tenancy isolation, RBAC, REST APIs, and vector PDF rendering:
 
 ```bash
-source /tmp/env.sh
-$TSX tests/test_scenario_39.ts
+# 1. Critical Scenario 39 (SafeMoney BigInt math & partial payment engine)
+npm run test:scenario39
+
+# 2. Multi-Tenant Security & RBAC Isolation Suite
+npm run test:security
+
+# 3. Complete End-to-End API & Headless Chrome Suite
+npm run test:e2e
 ```
 
 ---
@@ -124,14 +157,17 @@ $TSX tests/test_scenario_39.ts
 To run the application server:
 
 ```bash
-source /tmp/env.sh
-$TSX server/src/index.ts
+npm start
+# or: node --experimental-strip-types server/src/index.ts
 ```
 
 Open a web browser at `http://localhost:3000`.
 
-### Default Demo Credentials
+### Demo Login Personas (1-Click Login Supported)
 
-* **Administrator**: `admin@apexfin.com` / `admin123`
-* **Finance Manager**: `finance@apexfin.com` / `finance123`
-* **Staff**: `staff@apexfin.com` / `staff123`
+| Persona | Email | Password | Default Company | Role |
+| :--- | :--- | :--- | :--- | :--- |
+| **Alexander Vance** | `admin@apexfin.com` | `admin123` | Peka Integrated Tech (GHS) & Stellar Maritime (USD) | Superadmin / Administrator |
+| **Kofi Mensah** | `finance@apexfin.com` | `finance123` | Peka Integrated Tech (GHS) | Finance Manager |
+| **Sarah Jenkins** | `sarah@stellarmaritime.com` | `sarah123` | Stellar Maritime & Logistics LLC (USD) | Company Administrator |
+| **Ama Osei** | `staff@apexfin.com` | `staff123` | Peka Integrated Tech (GHS) | Staff Member |

@@ -5,6 +5,7 @@
 const state = {
   user: null,
   company: null,
+  myCompanies: [],
   currencies: [],
   baseCurrency: { code: 'GHS', symbol: 'GH₵' },
   taxRates: [],
@@ -22,13 +23,25 @@ const state = {
   activeReportTab: 'pnl',
   selectedStatementClient: null,
   activeTemplateId: null,
-  reversingPaymentId: null
+  reversingPaymentId: null,
+  sseConnection: null
 };
 
-// API Helper
+let listenersInitialized = false;
+
+// API Helper with Multi-Tenant Bearer Authentication
 async function api(path, options = {}) {
-  const headers = { 'Content-Type': 'application/json', ...(options.headers || {}) };
+  const token = localStorage.getItem('apex_token');
+  const headers = { 
+    'Content-Type': 'application/json', 
+    ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
+    ...(options.headers || {}) 
+  };
   const res = await fetch(`/api${path}`, { ...options, headers });
+  if (res.status === 401) {
+    showAuthOverlay();
+    throw new Error('Authentication required. Please sign in.');
+  }
   if (!res.ok) {
     const err = await res.json().catch(() => ({ error: res.statusText }));
     throw new Error(err.error || 'Request failed');
@@ -36,9 +49,20 @@ async function api(path, options = {}) {
   return res.json();
 }
 
+function showAuthOverlay() {
+  const overlay = document.getElementById('auth-overlay');
+  if (overlay) overlay.style.display = 'flex';
+}
+
+function hideAuthOverlay() {
+  const overlay = document.getElementById('auth-overlay');
+  if (overlay) overlay.style.display = 'none';
+}
+
 // Toast notification helper
 function showToast(message, type = 'info') {
   const container = document.getElementById('toast-container');
+  if (!container) return;
   const toast = document.createElement('div');
   toast.className = `toast toast-${type}`;
   toast.innerHTML = `
@@ -65,52 +89,129 @@ function formatBase(amount) {
   return formatMoney(amount, state.baseCurrency.code);
 }
 
-// ============================================================================
-// Initialization & Real-Time Sync
-// ============================================================================
-async function initApp() {
+// Sidebar User Profile Updates
+function updateSidebarUser() {
+  if (!state.user) return;
+  const initials = state.user.fullName ? state.user.fullName.split(' ').map(n => n[0]).join('').substring(0, 2).toUpperCase() : 'US';
+  const avatarEl = document.getElementById('sidebar-user-avatar');
+  if (avatarEl) avatarEl.innerText = initials;
+  const nameEl = document.getElementById('sidebar-user-name');
+  if (nameEl) nameEl.innerText = state.user.fullName;
+  const roleEl = document.getElementById('sidebar-user-role');
+  if (roleEl) {
+    roleEl.innerText = `${state.user.role} • ${state.company?.default_currency || state.baseCurrency?.code || 'GHS'} Base`;
+  }
+}
+
+// Header Company Switcher Updates
+function updateCompanySwitcher() {
+  const comp = state.company;
+  if (!comp) return;
+
+  const avatar = document.getElementById('header-company-avatar');
+  if (avatar) {
+    const initials = comp.name.split(' ').map(w => w[0]).join('').substring(0, 2).toUpperCase();
+    avatar.innerText = initials;
+  }
+
+  const nameEl = document.getElementById('header-company-name');
+  if (nameEl) nameEl.innerText = comp.name;
+
+  const currBadge = document.getElementById('header-currency-badge');
+  if (currBadge) currBadge.innerText = comp.default_currency || 'GHS';
+
+  const countBadge = document.getElementById('company-count-badge');
+  if (countBadge) countBadge.innerText = state.myCompanies.length;
+
+  const listEl = document.getElementById('company-switcher-list');
+  if (listEl) {
+    listEl.innerHTML = state.myCompanies.map(c => {
+      const isActive = c.id === comp.id;
+      const initials = c.name.split(' ').map(w => w[0]).join('').substring(0, 2).toUpperCase();
+      return `
+        <div class="company-switch-item ${isActive ? 'active' : ''}" data-company-id="${c.id}" style="padding: 10px 14px; border-bottom: 1px solid #f1f5f9; display: flex; align-items: center; justify-content: space-between; cursor: pointer; transition: background 0.15s ease; ${isActive ? 'background: #f0fdf4;' : ''}">
+          <div style="display: flex; align-items: center; gap: 10px; min-width: 0;">
+            <div style="width: 28px; height: 28px; border-radius: 6px; background: ${isActive ? '#16a34a' : '#0284c7'}; color: white; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 11px; flex-shrink: 0;">
+              ${initials}
+            </div>
+            <div style="min-width: 0;">
+              <div style="font-weight: 600; font-size: 13px; color: #0f172a; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 170px;">
+                ${c.name}
+              </div>
+              <div style="font-size: 11px; color: #64748b;">
+                ${c.role_name || 'Member'} &bull; <span style="font-weight: 600; color: #0284c7;">${c.default_currency || 'USD'}</span>
+              </div>
+            </div>
+          </div>
+          <div>
+            ${isActive ? '<span style="color: #16a34a; font-weight: 800; font-size: 14px;">✓</span>' : '<span style="font-size: 11px; color: #94a3b8;">Switch &rarr;</span>'}
+          </div>
+        </div>
+      `;
+    }).join('');
+
+    listEl.querySelectorAll('.company-switch-item').forEach(item => {
+      item.addEventListener('click', async () => {
+        const targetId = item.dataset.companyId;
+        const dropdown = document.getElementById('company-switcher-dropdown');
+        if (dropdown) dropdown.style.display = 'none';
+        await switchCompany(targetId);
+      });
+    });
+  }
+}
+
+// Switch Company Functionality
+async function switchCompany(targetCompanyId) {
+  if (state.company && state.company.id === targetCompanyId) return;
   try {
-    // 1. Load initial user and company profile
-    const authData = await api('/auth/me');
-    state.user = authData.user;
-    state.company = authData.company;
+    const res = await api('/auth/switch-company', {
+      method: 'POST',
+      body: JSON.stringify({ companyId: targetCompanyId })
+    });
+    localStorage.setItem('apex_token', res.token);
+    state.company = res.company;
+    state.user.role = res.role;
+    state.user.companyId = res.companyId;
+    state.user.companyName = res.companyName;
 
-    document.getElementById('sidebar-user-name').innerText = state.user.fullName;
-    document.getElementById('sidebar-user-role').innerText = `${state.user.role} • ${state.company?.default_currency || 'GHS'} Base`;
-
-    // 2. Load core lookups
-    const [currData, taxes] = await Promise.all([
+    // Refresh lookups for the new company
+    const [currData, taxes, myComps] = await Promise.all([
       api('/currencies'),
-      api('/tax-rates')
+      api('/tax-rates'),
+      api('/companies/my-companies')
     ]);
-
     state.currencies = currData.currencies;
     state.baseCurrency = currData.baseCurrency;
     state.taxRates = taxes;
     state.dashboardSelectedCurrency = state.baseCurrency.code;
+    state.myCompanies = myComps;
 
-    // 3. Connect Real-time SSE
+    // SSE reconnect to company event stream
     setupSSE();
 
-    // 4. Setup Global Search
-    setupSearch();
+    // UI Updates
+    updateSidebarUser();
+    updateCompanySwitcher();
+    showToast(`Switched active workspace to ${res.companyName}`, 'success');
 
-    // 5. Setup Nav & Modal handlers
-    setupEventListeners();
-
-    // 6. Initial Route Render
-    await navigate('dashboard');
+    // Re-render active view
+    await renderCurrentView();
     loadNotifications();
-
   } catch (err) {
-    console.error('Init error:', err);
-    showToast('Failed to connect to backend: ' + err.message, 'error');
+    showToast('Failed to switch company: ' + err.message, 'error');
   }
 }
 
-// Real-Time Server-Sent Events (SSE) Listener
+// Real-Time Server-Sent Events (SSE) Listener with Tenant Token
 function setupSSE() {
-  const evtSource = new EventSource('/api/events');
+  if (state.sseConnection) {
+    try { state.sseConnection.close(); } catch {}
+  }
+  const token = localStorage.getItem('apex_token');
+  const sseUrl = token ? `/api/events?token=${encodeURIComponent(token)}` : '/api/events';
+  const evtSource = new EventSource(sseUrl);
+  state.sseConnection = evtSource;
 
   evtSource.addEventListener('connected', (e) => {
     console.log('[SSE] Real-time channel active');
@@ -144,6 +245,79 @@ function setupSSE() {
       renderCurrentView();
     }
   });
+}
+
+// ============================================================================
+// Initialization & Real-Time Sync
+// ============================================================================
+async function initApp() {
+  try {
+    const token = localStorage.getItem('apex_token');
+    // If no token exists, attempt auto-login demo admin or show auth modal
+    if (!token) {
+      showAuthOverlay();
+      if (!listenersInitialized) {
+        setupEventListeners();
+        listenersInitialized = true;
+      }
+      return;
+    }
+
+    // 1. Load initial user and company profile
+    const authData = await api('/auth/me');
+    state.user = authData.user;
+    state.company = authData.company;
+    state.myCompanies = authData.myCompanies || [];
+
+    hideAuthOverlay();
+    updateSidebarUser();
+    updateCompanySwitcher();
+
+    // Show/Hide Platform Admin link
+    document.querySelectorAll('.platform-only-item').forEach(el => {
+      el.style.display = state.user.isSuperAdmin ? 'flex' : 'none';
+    });
+
+    // 2. Load core lookups
+    const [currData, taxes] = await Promise.all([
+      api('/currencies'),
+      api('/tax-rates')
+    ]);
+
+    state.currencies = currData.currencies;
+    state.baseCurrency = currData.baseCurrency;
+    state.taxRates = taxes;
+    state.dashboardSelectedCurrency = state.baseCurrency.code;
+
+    // 3. Connect Real-time SSE
+    setupSSE();
+
+    // 4. Setup Global Search
+    setupSearch();
+
+    // 5. Setup Nav & Modal handlers
+    if (!listenersInitialized) {
+      setupEventListeners();
+      listenersInitialized = true;
+    }
+
+    // 6. Initial Route Render
+    await navigate(state.activeNav || 'dashboard');
+    loadNotifications();
+
+  } catch (err) {
+    console.error('Init error:', err);
+    if (err.message && (err.message.includes('Authentication') || err.message.includes('token') || err.message.includes('401'))) {
+      localStorage.removeItem('apex_token');
+      showAuthOverlay();
+      if (!listenersInitialized) {
+        setupEventListeners();
+        listenersInitialized = true;
+      }
+    } else {
+      showToast('Failed to connect to backend: ' + err.message, 'error');
+    }
+  }
 }
 
 // ============================================================================
@@ -192,6 +366,12 @@ async function renderCurrentView() {
         break;
       case 'settings':
         await renderSettings(container);
+        break;
+      case 'team':
+        await renderTeam(container);
+        break;
+      case 'platform':
+        await renderPlatform(container);
         break;
       default:
         await renderDashboard(container);
@@ -1716,6 +1896,263 @@ async function renderSettings(container) {
 }
 
 // ============================================================================
+// 11. COMPANY TEAM MANAGEMENT VIEW
+// ============================================================================
+async function renderTeam(container) {
+  const members = await api('/companies/members');
+  const isAdmin = state.user.role === 'Administrator' || state.user.isSuperAdmin;
+
+  container.innerHTML = `
+    <div style="display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 16px; margin-bottom: 24px;">
+      <div>
+        <h1 style="font-size: 24px; font-weight: 800; color: #0f172a; letter-spacing: -0.02em;">Company Team & Access</h1>
+        <p style="font-size: 13px; color: #64748b; margin-top: 2px;">
+          Manage team members, roles, and invitation status for ${state.company?.name || 'this company'}
+        </p>
+      </div>
+      <div>
+        ${isAdmin ? `
+          <button id="btn-open-invite-modal" class="btn btn-primary" style="gap: 8px;">
+            <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><line x1="20" y1="8" x2="20" y2="14"/><line x1="23" y1="11" x2="17" y2="11"/></svg>
+            <span>+ Invite Member</span>
+          </button>
+        ` : ''}
+      </div>
+    </div>
+
+    <!-- Team Members Table -->
+    <div class="table-container" style="padding: 24px;">
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>Member</th>
+            <th>Email</th>
+            <th>Role</th>
+            <th>Status</th>
+            <th>Joined / Invited</th>
+            ${isAdmin ? '<th style="text-align: right;">Actions</th>' : ''}
+          </tr>
+        </thead>
+        <tbody>
+          ${members.map(m => {
+            const isSelf = m.id === state.user.id;
+            const initials = m.full_name ? m.full_name.split(' ').map(n => n[0]).join('').substring(0, 2).toUpperCase() : 'MB';
+            return `
+              <tr>
+                <td>
+                  <div style="display: flex; align-items: center; gap: 10px;">
+                    <div style="width: 32px; height: 32px; border-radius: 50%; background: #0284c7; color: white; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 12px; flex-shrink: 0;">
+                      ${initials}
+                    </div>
+                    <div>
+                      <div style="font-weight: 600; color: #0f172a;">${m.full_name} ${isSelf ? '<span class="badge badge-paid" style="font-size: 10px; margin-left: 4px;">You</span>' : ''}</div>
+                      <div style="font-size: 11px; color: #64748b;">${m.invitation_status === 'invited' ? 'Invitation pending' : 'Active team member'}</div>
+                    </div>
+                  </div>
+                </td>
+                <td>${m.email}</td>
+                <td>
+                  ${isAdmin && !isSelf ? `
+                    <select class="form-control change-role-select" data-user-id="${m.id}" style="width: 160px; font-size: 12px; padding: 4px 8px;">
+                      <option value="Administrator" ${m.role_name === 'Administrator' ? 'selected' : ''}>Administrator</option>
+                      <option value="Finance Manager" ${m.role_name === 'Finance Manager' ? 'selected' : ''}>Finance Manager</option>
+                      <option value="Staff" ${m.role_name === 'Staff' ? 'selected' : ''}>Staff</option>
+                    </select>
+                  ` : `
+                    <span class="badge ${m.role_name === 'Administrator' ? 'badge-overdue' : m.role_name === 'Finance Manager' ? 'badge-completed' : 'badge-draft'}">
+                      ${m.role_name}
+                    </span>
+                  `}
+                </td>
+                <td>
+                  <span class="badge ${m.invitation_status === 'accepted' ? 'badge-completed' : 'badge-draft'}">
+                    ${m.invitation_status === 'accepted' ? 'Active' : 'Invited'}
+                  </span>
+                </td>
+                <td style="font-size: 12px; color: #64748b;">
+                  ${m.joined_at ? new Date(m.joined_at).toLocaleDateString() : 'Pending'}
+                </td>
+                ${isAdmin ? `
+                  <td style="text-align: right;">
+                    ${!isSelf ? `
+                      <button class="btn btn-secondary btn-sm btn-remove-member" data-user-id="${m.id}" style="color: #ef4444; border-color: #fecaca;" title="Remove Member">
+                        Remove
+                      </button>
+                    ` : '<span style="font-size: 11px; color: #94a3b8;">Workspace Owner</span>'}
+                  </td>
+                ` : ''}
+              </tr>
+            `;
+          }).join('')}
+        </tbody>
+      </table>
+    </div>
+  `;
+
+  // Invite button trigger
+  const btnInvite = document.getElementById('btn-open-invite-modal');
+  if (btnInvite) {
+    btnInvite.addEventListener('click', () => {
+      document.getElementById('modal-invite-member').classList.add('open');
+    });
+  }
+
+  // Change role listeners
+  container.querySelectorAll('.change-role-select').forEach(sel => {
+    sel.addEventListener('change', async () => {
+      const targetUserId = sel.dataset.userId;
+      const newRole = sel.value;
+      try {
+        await api(`/companies/members/${targetUserId}/role`, {
+          method: 'PUT',
+          body: JSON.stringify({ roleName: newRole })
+        });
+        showToast(`Member role updated to ${newRole}`, 'success');
+      } catch (err) {
+        showToast(err.message, 'error');
+        renderTeam(container);
+      }
+    });
+  });
+
+  // Remove member listeners
+  container.querySelectorAll('.btn-remove-member').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      if (!confirm('Are you sure you want to remove this member from the company?')) return;
+      const targetUserId = btn.dataset.userId;
+      try {
+        await api(`/companies/members/${targetUserId}`, { method: 'DELETE' });
+        showToast('Member removed from company', 'info');
+        renderTeam(container);
+      } catch (err) {
+        showToast(err.message, 'error');
+      }
+    });
+  });
+}
+
+// ============================================================================
+// 12. PLATFORM ADMINISTRATION VIEW (SUPERADMINS)
+// ============================================================================
+async function renderPlatform(container) {
+  if (!state.user.isSuperAdmin) {
+    container.innerHTML = `
+      <div style="padding: 40px; text-align: center; background: #fee2e2; border-radius: 12px; color: #b91c1c;">
+        <h3>Access Restricted</h3>
+        <p style="margin-top: 8px;">Platform Administration is restricted to Superadministrators only.</p>
+      </div>
+    `;
+    return;
+  }
+
+  const companies = await api('/platform/companies');
+  const activeCount = companies.filter(c => c.status === 'active').length;
+  const suspendedCount = companies.filter(c => c.status === 'suspended').length;
+
+  container.innerHTML = `
+    <div style="margin-bottom: 24px;">
+      <h1 style="font-size: 24px; font-weight: 800; color: #0f172a; letter-spacing: -0.02em;">Platform Administration</h1>
+      <p style="font-size: 13px; color: #64748b; margin-top: 2px;">
+        Global multi-tenant governance, company activation states, and cross-tenant management
+      </p>
+    </div>
+
+    <!-- Platform Stats Cards -->
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; margin-bottom: 24px;">
+      <div class="stat-card" style="background: white; border: 1px solid var(--border); border-radius: 12px; padding: 20px;">
+        <div style="font-size: 12px; font-weight: 700; color: #64748b; text-transform: uppercase;">Total Tenants</div>
+        <div style="font-size: 28px; font-weight: 800; color: #0f172a; margin-top: 6px;">${companies.length}</div>
+      </div>
+      <div class="stat-card" style="background: white; border: 1px solid var(--border); border-radius: 12px; padding: 20px;">
+        <div style="font-size: 12px; font-weight: 700; color: #16a34a; text-transform: uppercase;">Active Companies</div>
+        <div style="font-size: 28px; font-weight: 800; color: #16a34a; margin-top: 6px;">${activeCount}</div>
+      </div>
+      <div class="stat-card" style="background: white; border: 1px solid var(--border); border-radius: 12px; padding: 20px;">
+        <div style="font-size: 12px; font-weight: 700; color: #ef4444; text-transform: uppercase;">Suspended Companies</div>
+        <div style="font-size: 28px; font-weight: 800; color: #ef4444; margin-top: 6px;">${suspendedCount}</div>
+      </div>
+    </div>
+
+    <!-- Companies Table -->
+    <div class="table-container" style="padding: 24px;">
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>Company Name</th>
+            <th>Legal Name</th>
+            <th>Currency</th>
+            <th>Plan</th>
+            <th>Status</th>
+            <th>Members</th>
+            <th>Invoices</th>
+            <th style="text-align: right;">Tenant Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${companies.map(c => `
+            <tr>
+              <td>
+                <div style="font-weight: 700; color: #0f172a;">${c.name}</div>
+                <div style="font-size: 11px; color: #64748b; font-family: monospace;">${c.id}</div>
+              </td>
+              <td>${c.legal_name || '—'}</td>
+              <td><span class="badge badge-unpaid">${c.default_currency}</span></td>
+              <td><span class="badge badge-draft" style="text-transform: capitalize;">${c.subscription_plan || 'standard'}</span></td>
+              <td>
+                <span class="badge ${c.status === 'active' ? 'badge-completed' : 'badge-overdue'}">
+                  ${c.status}
+                </span>
+              </td>
+              <td style="font-weight: 600;">${c.member_count || 1}</td>
+              <td style="font-weight: 600;">${c.invoice_count || 0}</td>
+              <td style="text-align: right;">
+                <div style="display: inline-flex; gap: 8px;">
+                  <button class="btn btn-secondary btn-sm btn-platform-switch" data-company-id="${c.id}" title="Switch context to this company">
+                    Enter &rarr;
+                  </button>
+                  <button class="btn btn-secondary btn-sm btn-toggle-status" data-company-id="${c.id}" data-current-status="${c.status}" style="color: ${c.status === 'active' ? '#ef4444' : '#16a34a'}; border-color: ${c.status === 'active' ? '#fecaca' : '#bbf7d0'};">
+                    ${c.status === 'active' ? 'Suspend' : 'Activate'}
+                  </button>
+                </div>
+              </td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    </div>
+  `;
+
+  // Enter company
+  container.querySelectorAll('.btn-platform-switch').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const cid = btn.dataset.companyId;
+      await switchCompany(cid);
+      navigate('dashboard');
+    });
+  });
+
+  // Toggle company status
+  container.querySelectorAll('.btn-toggle-status').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const cid = btn.dataset.companyId;
+      const currentStatus = btn.dataset.currentStatus;
+      const newStatus = currentStatus === 'active' ? 'suspended' : 'active';
+      if (!confirm(`Are you sure you want to set company ${cid} status to "${newStatus}"?`)) return;
+      try {
+        await api(`/platform/companies/${cid}/status`, {
+          method: 'PUT',
+          body: JSON.stringify({ status: newStatus })
+        });
+        showToast(`Company status updated to ${newStatus}`, 'success');
+        renderPlatform(container);
+      } catch (err) {
+        showToast(err.message, 'error');
+      }
+    });
+  });
+}
+
+// ============================================================================
 // MODAL CONTROLLERS & FORM LOGIC
 // ============================================================================
 
@@ -2300,6 +2737,137 @@ function setupEventListeners() {
   document.querySelectorAll('.modal-overlay').forEach(overlay => {
     overlay.addEventListener('click', (e) => {
       if (e.target === overlay) overlay.classList.remove('open');
+    });
+  });
+
+  // Company Switcher Dropdown
+  const btnSwitcher = document.getElementById('btn-company-switcher');
+  const dropdownSwitcher = document.getElementById('company-switcher-dropdown');
+  if (btnSwitcher && dropdownSwitcher) {
+    btnSwitcher.addEventListener('click', (e) => {
+      e.stopPropagation();
+      dropdownSwitcher.style.display = dropdownSwitcher.style.display === 'block' ? 'none' : 'block';
+    });
+    document.addEventListener('click', (e) => {
+      if (!dropdownSwitcher.contains(e.target) && !btnSwitcher.contains(e.target)) {
+        dropdownSwitcher.style.display = 'none';
+      }
+    });
+  }
+
+  // Onboard Company Modal Trigger & Form Submit
+  const btnOpenOnboard = document.getElementById('btn-open-onboard-modal');
+  if (btnOpenOnboard) {
+    btnOpenOnboard.addEventListener('click', () => {
+      if (dropdownSwitcher) dropdownSwitcher.style.display = 'none';
+      document.getElementById('modal-onboard').classList.add('open');
+    });
+  }
+
+  const formOnboard = document.getElementById('form-onboard');
+  if (formOnboard) {
+    formOnboard.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      try {
+        const payload = {
+          name: document.getElementById('onboard-name').value.trim(),
+          legal_name: document.getElementById('onboard-legal-name').value.trim(),
+          default_currency: document.getElementById('onboard-currency').value,
+          tax_identification_number: document.getElementById('onboard-tax-id').value.trim(),
+          email: document.getElementById('onboard-email').value.trim(),
+          phone: document.getElementById('onboard-phone').value.trim(),
+          address: document.getElementById('onboard-address').value.trim(),
+          default_payment_terms_days: parseInt(document.getElementById('onboard-terms').value, 10) || 30,
+          primary_color: document.getElementById('onboard-color').value,
+          payment_instructions: document.getElementById('onboard-instructions').value.trim()
+        };
+
+        const onboarded = await api('/companies/onboard', {
+          method: 'POST',
+          body: JSON.stringify(payload)
+        });
+
+        document.getElementById('modal-onboard').classList.remove('open');
+        formOnboard.reset();
+        showToast(`Company "${onboarded.name}" successfully created!`, 'success');
+
+        // Refresh user companies and switch to new company
+        const myComps = await api('/companies/my-companies');
+        state.myCompanies = myComps;
+        await switchCompany(onboarded.id);
+      } catch (err) {
+        showToast('Onboarding failed: ' + err.message, 'error');
+      }
+    });
+  }
+
+  // Invite Team Member Form Submit
+  const formInvite = document.getElementById('form-invite-member');
+  if (formInvite) {
+    formInvite.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      try {
+        const email = document.getElementById('invite-email').value.trim();
+        const fullName = document.getElementById('invite-name').value.trim();
+        const roleName = document.getElementById('invite-role').value;
+
+        await api('/companies/members/invite', {
+          method: 'POST',
+          body: JSON.stringify({ email, fullName, roleName })
+        });
+
+        document.getElementById('modal-invite-member').classList.remove('open');
+        formInvite.reset();
+        showToast(`Invitation sent to ${email}!`, 'success');
+
+        if (state.activeNav === 'team') {
+          const container = document.getElementById('app-view');
+          renderTeam(container);
+        }
+      } catch (err) {
+        showToast('Failed to invite member: ' + err.message, 'error');
+      }
+    });
+  }
+
+  // Auth Form & Demo Accounts Handlers
+  async function performLogin(email, password) {
+    try {
+      const res = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password })
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || 'Login failed');
+      }
+      localStorage.setItem('apex_token', data.token);
+      hideAuthOverlay();
+      showToast(`Welcome back, ${data.user.fullName}!`, 'success');
+      await initApp();
+    } catch (err) {
+      showToast(err.message, 'error');
+    }
+  }
+
+  const formLogin = document.getElementById('form-login');
+  if (formLogin) {
+    formLogin.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const email = document.getElementById('login-email').value.trim();
+      const pass = document.getElementById('login-password').value;
+      await performLogin(email, pass);
+    });
+  }
+
+  document.querySelectorAll('.demo-account-chip').forEach(chip => {
+    chip.addEventListener('click', async () => {
+      const email = chip.dataset.email;
+      const pass = chip.dataset.pass;
+      document.getElementById('login-email').value = email;
+      document.getElementById('login-password').value = pass;
+      await performLogin(email, pass);
     });
   });
 

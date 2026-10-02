@@ -370,6 +370,25 @@ export function initDatabase() {
     INSERT OR IGNORE INTO users (id, email, password_hash, salt, full_name, is_superadmin, status)
     VALUES ('u_admin_default', 'admin@apexfin.com', 'seeded', 'seeded', 'Alexander Vance (Admin)', 1, 'active');
   `);
+
+  // Safe schema migrations for existing SQLite databases
+  ensureColumnExists('companies', 'status', "TEXT DEFAULT 'active'");
+  ensureColumnExists('companies', 'subscription_plan', "TEXT DEFAULT 'professional'");
+  ensureColumnExists('companies', 'created_by', 'TEXT');
+  ensureColumnExists('company_users', 'invitation_status', "TEXT DEFAULT 'accepted'");
+  ensureColumnExists('company_users', 'invited_by', 'TEXT');
+  ensureColumnExists('company_users', 'joined_at', "TEXT");
+}
+
+function ensureColumnExists(table: string, column: string, definition: string) {
+  try {
+    const columns = queryAll(`PRAGMA table_info(${table})`);
+    if (!columns.some((c: any) => c.name === column)) {
+      db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+    }
+  } catch (e: any) {
+    console.warn(`[Migration Warning] Could not add column ${column} to ${table}:`, e.message);
+  }
 }
 
 /**
