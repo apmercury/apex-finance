@@ -2920,46 +2920,30 @@ function setupEventListeners() {
   document.getElementById('btn-quick-invoice').addEventListener('click', openCreateInvoiceModal);
   document.getElementById('btn-quick-payment').addEventListener('click', () => openRecordPaymentModal());
 
-  // Payment Note Template Selector
-  const selNote = document.getElementById('pay-notes-template-select');
-  if (selNote) {
-    selNote.addEventListener('change', () => {
-      const opt = selNote.options[selNote.selectedIndex];
-      if (!opt || !opt.value) return;
-      const content = decodeURIComponent(opt.dataset.content || '');
-      const split = opt.dataset.split ? parseFloat(opt.dataset.split) : null;
-      applyPaymentNote(content, split);
-    });
-  }
-
-  // Button: Save Current Note As Preset
-  const btnSaveCustomNote = document.getElementById('btn-save-custom-note');
-  if (btnSaveCustomNote) {
-    btnSaveCustomNote.addEventListener('click', async () => {
-      const content = document.getElementById('pay-notes')?.value?.trim();
-      if (!content) {
-        showToast('Please type a note in the remarks box first to save it', 'warning');
-        return;
+  // Payment Note Quick Presets & Auto-Splits
+  document.querySelectorAll('.btn-pay-preset').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const note = btn.dataset.note;
+      const split = btn.dataset.split ? parseFloat(btn.dataset.split) : null;
+      const noteEl = document.getElementById('pay-notes');
+      if (noteEl) {
+        noteEl.value = note;
       }
-      const defaultTitle = content.slice(0, 24) + (content.length > 24 ? '...' : '');
-      const title = prompt('Enter a short name/label for this saved note preset:', defaultTitle);
-      if (!title || !title.trim()) return;
-
-      try {
-        await api('/payment-notes', {
-          method: 'POST',
-          body: JSON.stringify({
-            title: title.trim(),
-            content: content
-          })
-        });
-        showToast(`Saved note "${title.trim()}"!`, 'success');
-        await loadPaymentNotes();
-      } catch (err) {
-        showToast(err.message, 'error');
+      if (split !== null) {
+        const invSel = document.getElementById('pay-invoice');
+        const opt = invSel?.options[invSel.selectedIndex];
+        if (opt && opt.dataset.balance) {
+          const balance = parseFloat(opt.dataset.balance) || 0;
+          const targetAmount = Math.max(0, balance * split);
+          const amtEl = document.getElementById('pay-amount');
+          if (amtEl) {
+            amtEl.value = targetAmount.toFixed(2);
+            updatePaymentProgressSimulation();
+          }
+        }
       }
     });
-  }
+  });
 
   // Notifications Bell toggle
   const btnNotif = document.getElementById('btn-notifications');

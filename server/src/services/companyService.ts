@@ -519,7 +519,6 @@ export class CompanyService {
       execute(`DELETE FROM invoice_templates WHERE company_id = ?`, [companyId]);
       execute(`DELETE FROM exchange_rates WHERE company_id = ?`, [companyId]);
       execute(`DELETE FROM notifications WHERE company_id = ?`, [companyId]);
-      execute(`DELETE FROM payment_note_templates WHERE company_id = ?`, [companyId]);
       execute(`DELETE FROM company_users WHERE company_id = ?`, [companyId]);
       execute(`DELETE FROM audit_logs WHERE company_id = ?`, [companyId]);
       execute(`DELETE FROM companies WHERE id = ?`, [companyId]);

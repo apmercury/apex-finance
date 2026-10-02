@@ -369,22 +369,19 @@
           </div>
 
           <div class="form-group">
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; flex-wrap: wrap; gap: 6px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
               <label class="form-label" style="margin-bottom: 0;">Payment Note / Remarks</label>
-              <div style="display: flex; gap: 6px; align-items: center;">
-                <select id="pay-notes-template-select" class="form-control" style="font-size: 11px; height: 26px; padding: 2px 6px; width: auto; max-width: 180px;">
-                  <option value="">-- Load Saved Note --</option>
-                </select>
-                <button type="button" id="btn-save-custom-note" class="btn btn-secondary btn-xs" style="padding: 2px 8px; font-size: 11px; white-space: nowrap; border-color: #6366f1; color: #4f46e5; background: #eef2ff; font-weight: 600;" title="Save the note written below so you can use it again later">
-                  💾 Save Note As Preset
-                </button>
-              </div>
+              <span style="font-size: 11px; color: var(--text-muted, #64748b);">Quick presets:</span>
             </div>
-
-            <!-- Saved User Note Presets -->
-            <div id="pay-notes-chips-container" style="display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px;"></div>
-
-            <textarea class="form-control" id="pay-notes" rows="2" placeholder="Write payment note remarks or select/save a preset above..."></textarea>
+            <div style="display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px;">
+              <button type="button" class="btn btn-secondary btn-xs btn-pay-preset" data-note="50% installment payment" data-split="0.5" title="Set 50% amount and note" style="padding: 2px 8px; font-size: 11px; border-radius: 12px; background: rgba(99,102,241,0.08); border-color: rgba(99,102,241,0.2); color: #4f46e5;">⚡ 50% Half Payment</button>
+              <button type="button" class="btn btn-secondary btn-xs btn-pay-preset" data-note="Partial installment payment against balance" title="Partial installment note" style="padding: 2px 8px; font-size: 11px; border-radius: 12px;">⚡ Partial Installment</button>
+              <button type="button" class="btn btn-secondary btn-xs btn-pay-preset" data-note="Milestone progress payment" title="Milestone note" style="padding: 2px 8px; font-size: 11px; border-radius: 12px;">⚡ Milestone Progress</button>
+              <button type="button" class="btn btn-secondary btn-xs btn-pay-preset" data-note="Final settlement of invoice balance" data-split="1.0" title="Set full remaining balance and note" style="padding: 2px 8px; font-size: 11px; border-radius: 12px; background: rgba(16,185,129,0.08); border-color: rgba(16,185,129,0.2); color: #059669;">⚡ Full Settlement</button>
+              <button type="button" class="btn btn-secondary btn-xs btn-pay-preset" data-note="Direct bank transfer remittance" style="padding: 2px 8px; font-size: 11px; border-radius: 12px;">⚡ Bank Remittance</button>
+              <button type="button" class="btn btn-secondary btn-xs btn-pay-preset" data-note="Mobile Money remittance" style="padding: 2px 8px; font-size: 11px; border-radius: 12px;">⚡ MoMo Transfer</button>
+            </div>
+            <textarea class="form-control" id="pay-notes" rows="2" placeholder="Payment remarks or click a quick preset above..."></textarea>
           </div>
 
           <!-- Administrator Overpayment Bypass (shown only when overpaying) -->
