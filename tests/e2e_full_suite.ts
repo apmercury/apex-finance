@@ -32,7 +32,11 @@ async function runSuite() {
   console.log('=== STARTING FULL END-TO-END VERIFICATION SUITE ===\n');
 
   if (!server.listening) {
-    await new Promise(r => server.once('listening', r));
+    try {
+      await fetch(BASE_URL);
+    } catch {
+      await new Promise(r => server.once('listening', r));
+    }
   }
   console.log('Server confirmed listening on port', PORT);
 

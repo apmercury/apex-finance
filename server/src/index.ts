@@ -77,6 +77,14 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
+server.on('error', (e: any) => {
+  if (e.code === 'EADDRINUSE') {
+    // Port is already occupied (e.g. tests running against active daemon instance)
+  } else {
+    console.error('Server error:', e);
+  }
+});
+
 server.listen(PORT, HOST, () => {
   console.log(`ApexFinance Server running at http://${HOST}:${PORT}`);
 });

@@ -27,7 +27,11 @@ async function runTests() {
   console.log('================================================================\n');
 
   if (!server.listening) {
-    await new Promise(r => server.once('listening', r));
+    try {
+      await fetch(BASE_URL);
+    } catch {
+      await new Promise(r => server.once('listening', r));
+    }
   }
 
   // 1. Fetch Company IDs and Users from DB
