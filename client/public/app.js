@@ -738,7 +738,9 @@ async function renderInvoices(container) {
                 No invoices found matching criteria. Click "+ Create Invoice" to generate one.
               </td>
             </tr>
-          ` : invoices.map(inv => `
+          ` : invoices.map(inv => {
+            const tokenParam = localStorage.getItem('apex_token') ? `?token=${encodeURIComponent(localStorage.getItem('apex_token'))}` : '';
+            return `
             <tr>
               <td>
                 <div style="font-weight: 700; color: #0284c7;">${inv.invoice_number}</div>
@@ -782,8 +784,12 @@ async function renderInvoices(container) {
                       Pay
                     </button>
                   ` : ''}
-                  <a href="/api/invoices/${inv.id}/pdf" target="_blank" class="btn btn-secondary btn-sm" title="Download PDF Invoice">
-                    PDF
+                  <a href="/api/invoices/${inv.id}/pdf${tokenParam}" target="_blank" class="btn btn-secondary btn-sm" title="View PDF Invoice in Browser">
+                    <svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                    <span>View</span>
+                  </a>
+                  <a href="/api/invoices/${inv.id}/pdf${tokenParam ? tokenParam + '&download=true' : '?download=true'}" target="_blank" class="btn btn-secondary btn-sm" title="Download PDF Invoice">
+                    <svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
                   </a>
                   ${inv.status === 'Draft' ? `
                     <button class="btn btn-secondary btn-sm btn-send-invoice" data-id="${inv.id}" title="Mark Sent & Dispatch Email">
@@ -793,7 +799,8 @@ async function renderInvoices(container) {
                 </div>
               </td>
             </tr>
-          `).join('')}
+          `;
+          }).join('')}
         </tbody>
       </table>
     </div>
@@ -870,7 +877,9 @@ async function renderPayments(container) {
                 No payment transactions recorded yet.
               </td>
             </tr>
-          ` : payments.map(p => `
+          ` : payments.map(p => {
+            const tokenParam = localStorage.getItem('apex_token') ? `?token=${encodeURIComponent(localStorage.getItem('apex_token'))}` : '';
+            return `
             <tr>
               <td style="font-weight: 700; color: #16a34a;">${p.payment_number}</td>
               <td style="color: #64748b;">${p.payment_date}</td>
@@ -886,8 +895,12 @@ async function renderPayments(container) {
               </td>
               <td style="text-align: right;">
                 <div style="display: inline-flex; gap: 6px;">
-                  <a href="/api/payments/${p.id}/pdf" target="_blank" class="btn btn-secondary btn-sm" title="Download Official Receipt">
-                    Receipt
+                  <a href="/api/payments/${p.id}/pdf${tokenParam}" target="_blank" class="btn btn-secondary btn-sm" title="View Official Receipt in Browser">
+                    <svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                    <span>Receipt</span>
+                  </a>
+                  <a href="/api/payments/${p.id}/pdf${tokenParam ? tokenParam + '&download=true' : '?download=true'}" target="_blank" class="btn btn-secondary btn-sm" title="Download Official Receipt">
+                    <svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
                   </a>
                   ${p.status === 'Completed' ? `
                     <button class="btn btn-danger btn-sm btn-reverse-payment" data-id="${p.id}" title="Reverse Payment">
@@ -897,7 +910,8 @@ async function renderPayments(container) {
                 </div>
               </td>
             </tr>
-          `).join('')}
+          `;
+          }).join('')}
         </tbody>
       </table>
     </div>
@@ -2769,32 +2783,47 @@ function setupEventListeners() {
     formOnboard.addEventListener('submit', async (e) => {
       e.preventDefault();
       try {
+        const companyName = document.getElementById('onboard-name')?.value?.trim();
+        if (!companyName) {
+          showToast('Company name is required', 'error');
+          return;
+        }
+
         const payload = {
-          name: document.getElementById('onboard-name').value.trim(),
-          legal_name: document.getElementById('onboard-legal-name').value.trim(),
-          default_currency: document.getElementById('onboard-currency').value,
-          tax_identification_number: document.getElementById('onboard-tax-id').value.trim(),
-          email: document.getElementById('onboard-email').value.trim(),
-          phone: document.getElementById('onboard-phone').value.trim(),
-          address: document.getElementById('onboard-address').value.trim(),
-          default_payment_terms_days: parseInt(document.getElementById('onboard-terms').value, 10) || 30,
-          primary_color: document.getElementById('onboard-color').value,
-          payment_instructions: document.getElementById('onboard-instructions').value.trim()
+          name: companyName,
+          legal_name: companyName,
+          country: document.getElementById('onboard-country')?.value?.trim() || 'United States',
+          default_currency: document.getElementById('onboard-currency')?.value || 'USD',
+          invoice_prefix: document.getElementById('onboard-prefix')?.value?.trim() || 'INV-',
+          tax_identification_number: document.getElementById('onboard-tax-id')?.value?.trim() || '',
+          business_registration_number: document.getElementById('onboard-reg-num')?.value?.trim() || '',
+          email: document.getElementById('onboard-email')?.value?.trim() || '',
+          phone: document.getElementById('onboard-phone')?.value?.trim() || '',
+          address: document.getElementById('onboard-address')?.value?.trim() || '',
+          default_payment_terms_days: parseInt(document.getElementById('onboard-terms')?.value, 10) || 30,
+          primary_color: document.getElementById('onboard-color')?.value || '#0284c7',
+          payment_instructions: document.getElementById('onboard-instructions')?.value?.trim() || ''
         };
 
-        const onboarded = await api('/companies/onboard', {
+        const res = await api('/companies/onboard', {
           method: 'POST',
           body: JSON.stringify(payload)
         });
 
+        const newCompany = res.company || res;
+        const newCompId = newCompany.id;
+        const newCompName = newCompany.name || companyName;
+
         document.getElementById('modal-onboard').classList.remove('open');
         formOnboard.reset();
-        showToast(`Company "${onboarded.name}" successfully created!`, 'success');
+        showToast(`Company "${newCompName}" successfully created!`, 'success');
 
         // Refresh user companies and switch to new company
         const myComps = await api('/companies/my-companies');
         state.myCompanies = myComps;
-        await switchCompany(onboarded.id);
+        if (newCompId) {
+          await switchCompany(newCompId);
+        }
       } catch (err) {
         showToast('Onboarding failed: ' + err.message, 'error');
       }

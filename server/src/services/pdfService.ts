@@ -5,6 +5,7 @@ import { queryOne } from '../db/database.ts';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { execFileSync } from 'node:child_process';
+import puppeteer from 'puppeteer-core';
 
 function getChromeExecutablePath(): string {
   // 1. Check environment variable first
@@ -338,39 +339,74 @@ export class PdfService {
   }
 
   /**
-   * Convert any HTML string into a PDF file using Chrome Headless
+   * Convert any HTML string into a PDF file using Chrome Headless via Puppeteer or CLI fallback
    */
-  public static generatePdfFromHtml(html: string, outputPath: string): string {
-    const tempHtmlPath = path.join('/tmp', `pdf_${Date.now()}_${Math.random().toString(36).substring(7)}.html`);
-    fs.writeFileSync(tempHtmlPath, html, 'utf8');
-
+  public static async generatePdfFromHtml(html: string, outputPath: string): Promise<string> {
     fs.mkdirSync(path.dirname(outputPath), { recursive: true });
+
+    // 1. Primary: Use Puppeteer for reliable, ultra-fast vector PDF rendering (~800ms)
+    try {
+      const browser = await puppeteer.launch({
+        executablePath: CHROME_PATH,
+        args: [
+          '--no-sandbox',
+          '--disable-gpu',
+          '--disable-dev-shm-usage',
+          '--no-first-run',
+          '--no-default-browser-check'
+        ]
+      });
+      try {
+        const page = await browser.newPage();
+        await page.setContent(html, { waitUntil: 'load' });
+        await page.pdf({
+          path: outputPath,
+          format: 'A4',
+          printBackground: true,
+          margin: { top: '12mm', right: '12mm', bottom: '12mm', left: '12mm' }
+        });
+        return outputPath;
+      } finally {
+        await browser.close();
+      }
+    } catch (puppeteerErr: any) {
+      console.warn('[PDF] Puppeteer engine notice, falling back to CLI:', puppeteerErr?.message || puppeteerErr);
+    }
+
+    // 2. Secondary Fallback: Isolated CLI execution with dedicated temp user data directory
+    const tempHtmlPath = path.join('/tmp', `pdf_${Date.now()}_${Math.random().toString(36).substring(7)}.html`);
+    const tempUserDataDir = fs.mkdtempSync('/tmp/chrome_pdf_');
+    fs.writeFileSync(tempHtmlPath, html, 'utf8');
 
     try {
       execFileSync(CHROME_PATH, [
-        '--headless',
+        '--headless=new',
         '--no-sandbox',
         '--disable-gpu',
+        '--no-first-run',
+        '--no-default-browser-check',
+        '--disable-background-networking',
+        '--disable-extensions',
+        `--user-data-dir=${tempUserDataDir}`,
         '--print-to-pdf-no-header',
         `--print-to-pdf=${outputPath}`,
         tempHtmlPath
-      ]);
+      ], { timeout: 15000 });
     } finally {
-      if (fs.existsSync(tempHtmlPath)) {
-        fs.unlinkSync(tempHtmlPath);
-      }
+      if (fs.existsSync(tempHtmlPath)) fs.unlinkSync(tempHtmlPath);
+      try { fs.rmSync(tempUserDataDir, { recursive: true, force: true }); } catch {}
     }
 
     return outputPath;
   }
 
-  public static generateInvoicePdf(companyId: string, invoiceId: string): string {
+  public static async generateInvoicePdf(companyId: string, invoiceId: string): Promise<string> {
     const html = this.renderInvoiceHtml(companyId, invoiceId);
     const outputPath = path.join(process.cwd(), 'storage', companyId, 'invoices', `invoice_${invoiceId}.pdf`);
     return this.generatePdfFromHtml(html, outputPath);
   }
 
-  public static generateReceiptPdf(companyId: string, paymentId: string): string {
+  public static async generateReceiptPdf(companyId: string, paymentId: string): Promise<string> {
     const html = this.renderReceiptHtml(companyId, paymentId);
     const outputPath = path.join(process.cwd(), 'storage', companyId, 'receipts', `receipt_${paymentId}.pdf`);
     return this.generatePdfFromHtml(html, outputPath);

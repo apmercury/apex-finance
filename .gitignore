@@ -1,3 +1,8 @@
- .DS_Store
+.DS_Store
 node_modules/
+*.sqlite-shm
+*.sqlite-wal
+storage/dashboard_rendered.png
+storage/comp_*
+storage/**/*.pdf
 

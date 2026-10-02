@@ -105,8 +105,8 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
       const isSuperAdmin = Boolean(user.is_superadmin);
       const myCompanies = CompanyService.getUserCompanies(user.id, isSuperAdmin);
 
-      // Select initial active company
-      const activeComp = myCompanies[0];
+      // Select initial active company (prefer comp_apex_01 if user is member, else first)
+      const activeComp = myCompanies.find((c: any) => c.id === 'comp_apex_01') || myCompanies[0];
       const companyId = activeComp?.id || 'comp_apex_01';
       const roleName = activeComp?.role_name || (isSuperAdmin ? 'Administrator' : 'Staff');
       const companyName = activeComp?.name || 'Apex Commercial Technologies';
@@ -631,18 +631,37 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 
   if (pathname.match(/^\/api\/invoices\/([A-Za-z0-9_-]+)\/pdf$/) && method === 'GET') {
     const id = pathname.split('/')[3];
-    const inv = InvoiceService.getInvoiceById(companyId, id);
+    let targetCompanyId = companyId;
+    let inv = InvoiceService.getInvoiceById(targetCompanyId, id);
+
     if (!inv) {
-      sendJson(res, 404, { error: 'Invoice not found in active company' });
+      const foundInvoice = queryOne<{ company_id: string }>(`SELECT company_id FROM invoices WHERE id = ?`, [id]);
+      if (foundInvoice) {
+        const hasAccess = auth.isSuperAdmin || queryOne(
+          `SELECT 1 FROM company_users WHERE user_id = ? AND company_id = ? AND is_active = 1`,
+          [auth.userId, foundInvoice.company_id]
+        );
+        if (hasAccess) {
+          targetCompanyId = foundInvoice.company_id;
+          inv = InvoiceService.getInvoiceById(targetCompanyId, id);
+        }
+      }
+    }
+
+    if (!inv) {
+      sendJson(res, 404, { error: 'Invoice not found or access denied' });
       return true;
     }
     try {
-      const pdfPath = PdfService.generateInvoicePdf(companyId, id);
+      const pdfPath = await PdfService.generateInvoicePdf(targetCompanyId, id);
       const stat = fs.statSync(pdfPath);
+      const isDownload = query.download === 'true' || query.download === '1';
+      const disposition = isDownload ? 'attachment' : 'inline';
+      const filename = `invoice_${inv.invoice_number || id}.pdf`;
       res.writeHead(200, {
         'Content-Type': 'application/pdf',
         'Content-Length': stat.size,
-        'Content-Disposition': `attachment; filename="invoice_${id}.pdf"`
+        'Content-Disposition': `${disposition}; filename="${filename}"`
       });
       const stream = fs.createReadStream(pdfPath);
       stream.pipe(res);
@@ -722,18 +741,37 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 
   if (pathname.match(/^\/api\/payments\/([A-Za-z0-9_-]+)\/pdf$/) && method === 'GET') {
     const id = pathname.split('/')[3];
-    const p = PaymentService.getPaymentById(companyId, id);
+    let targetCompanyId = companyId;
+    let p = PaymentService.getPaymentById(targetCompanyId, id);
+
     if (!p) {
-      sendJson(res, 404, { error: 'Payment not found in active company' });
+      const foundPayment = queryOne<{ company_id: string }>(`SELECT company_id FROM payments WHERE id = ?`, [id]);
+      if (foundPayment) {
+        const hasAccess = auth.isSuperAdmin || queryOne(
+          `SELECT 1 FROM company_users WHERE user_id = ? AND company_id = ? AND is_active = 1`,
+          [auth.userId, foundPayment.company_id]
+        );
+        if (hasAccess) {
+          targetCompanyId = foundPayment.company_id;
+          p = PaymentService.getPaymentById(targetCompanyId, id);
+        }
+      }
+    }
+
+    if (!p) {
+      sendJson(res, 404, { error: 'Payment not found or access denied' });
       return true;
     }
     try {
-      const pdfPath = PdfService.generateReceiptPdf(companyId, id);
+      const pdfPath = await PdfService.generateReceiptPdf(targetCompanyId, id);
       const stat = fs.statSync(pdfPath);
+      const isDownload = query.download === 'true' || query.download === '1';
+      const disposition = isDownload ? 'attachment' : 'inline';
+      const filename = `receipt_${p.payment_number || id}.pdf`;
       res.writeHead(200, {
         'Content-Type': 'application/pdf',
         'Content-Length': stat.size,
-        'Content-Disposition': `attachment; filename="receipt_${id}.pdf"`
+        'Content-Disposition': `${disposition}; filename="${filename}"`
       });
       const stream = fs.createReadStream(pdfPath);
       stream.pipe(res);
