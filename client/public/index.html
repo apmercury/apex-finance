@@ -400,6 +400,39 @@
     </div>
   </div>
 
+  <!-- MODAL: Payment Receipt -->
+  <div class="modal-overlay" id="modal-receipt">
+    <div class="modal-dialog" style="max-width: 620px;">
+      <div class="modal-header" style="background: #f8fafc; border-bottom: 1px solid #e2e8f0;">
+        <div>
+          <h3 class="modal-title" style="display: flex; align-items: center; gap: 8px;">
+            <span>Official Payment Receipt</span>
+            <span class="badge badge-completed" id="receipt-modal-status">Completed</span>
+          </h3>
+          <p style="font-size: 12px; color: #64748b; margin-top: 2px;">Receipt #: <strong id="receipt-modal-number" style="color: #0f172a;"></strong></p>
+        </div>
+        <button class="btn btn-secondary btn-sm close-modal">&times;</button>
+      </div>
+      <div class="modal-body" style="padding: 24px;">
+        <!-- Receipt Content Card -->
+        <div id="receipt-preview-card" style="border: 1px solid #e2e8f0; border-radius: 12px; padding: 22px; background: white; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05);">
+          <!-- Injected dynamically via JS -->
+        </div>
+      </div>
+      <div class="modal-footer" style="background: #f8fafc; border-top: 1px solid #e2e8f0; display: flex; justify-content: space-between; align-items: center;">
+        <button type="button" class="btn btn-secondary close-modal">Close</button>
+        <div style="display: flex; gap: 8px;">
+          <a id="btn-receipt-view-html" href="#" target="_blank" class="btn btn-secondary" style="font-size: 13px;">
+            🖨️ Print / Preview
+          </a>
+          <a id="btn-receipt-download-pdf" href="#" target="_blank" class="btn btn-primary" style="font-size: 13px; font-weight: 600;">
+            📄 Download Receipt PDF
+          </a>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- MODAL: Add Client -->
   <div class="modal-overlay" id="modal-client">
     <div class="modal-dialog">

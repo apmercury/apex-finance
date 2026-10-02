@@ -895,11 +895,11 @@ async function renderPayments(container) {
               </td>
               <td style="text-align: right;">
                 <div style="display: inline-flex; gap: 6px;">
-                  <a href="/api/payments/${p.id}/pdf${tokenParam}" target="_blank" class="btn btn-secondary btn-sm" title="View Official Receipt in Browser">
+                  <button class="btn btn-secondary btn-sm btn-open-receipt" data-id="${p.id}" title="View Payment Receipt Details">
                     <svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
                     <span>Receipt</span>
-                  </a>
-                  <a href="/api/payments/${p.id}/pdf${tokenParam ? tokenParam + '&download=true' : '?download=true'}" target="_blank" class="btn btn-secondary btn-sm" title="Download Official Receipt">
+                  </button>
+                  <a href="/api/payments/${p.id}/pdf${tokenParam ? tokenParam + '&download=true' : '?download=true'}" target="_blank" class="btn btn-secondary btn-sm" title="Download Official Receipt PDF">
                     <svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
                   </a>
                   ${p.status === 'Completed' ? `
@@ -918,6 +918,12 @@ async function renderPayments(container) {
   `;
 
   document.getElementById('btn-record-payment').addEventListener('click', () => openRecordPaymentModal());
+
+  container.querySelectorAll('.btn-open-receipt').forEach(btn => {
+    btn.addEventListener('click', () => {
+      openReceiptModal(btn.dataset.id);
+    });
+  });
 
   document.querySelectorAll('.btn-reverse-payment').forEach(btn => {
     btn.addEventListener('click', () => {
@@ -2689,7 +2695,7 @@ document.getElementById('form-payment').addEventListener('submit', async (e) => 
     const notes = document.getElementById('pay-notes').value;
     const allowOverpayment = document.getElementById('pay-allow-overpayment').checked;
 
-    await api('/payments', {
+    const payment = await api('/payments', {
       method: 'POST',
       body: JSON.stringify({
         client_id: clientId,
@@ -2704,13 +2710,79 @@ document.getElementById('form-payment').addEventListener('submit', async (e) => 
       })
     });
 
-    showToast('Payment recorded successfully!', 'success');
+    showToast(`Payment ${payment?.payment_number || ''} recorded successfully!`, 'success');
     document.getElementById('modal-payment').classList.remove('open');
+    if (payment && payment.id) {
+      await openReceiptModal(payment.id);
+    }
     renderCurrentView();
   } catch (err) {
     showToast(err.message, 'error');
   }
 });
+
+// Official Payment Receipt Modal Viewer
+async function openReceiptModal(paymentId) {
+  try {
+    const payment = await api(`/payments/${paymentId}`);
+    const token = localStorage.getItem('apex_token');
+    const tokenParam = token ? `?token=${encodeURIComponent(token)}` : '';
+
+    document.getElementById('receipt-modal-number').innerText = payment.payment_number || payment.id;
+    const statusEl = document.getElementById('receipt-modal-status');
+    if (statusEl) {
+      statusEl.innerText = payment.status || 'Completed';
+      statusEl.className = `badge badge-${(payment.status || 'completed').toLowerCase()}`;
+    }
+
+    const card = document.getElementById('receipt-preview-card');
+    card.innerHTML = `
+      <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 20px; border-bottom: 1px solid #f1f5f9; padding-bottom: 14px;">
+        <div>
+          <div style="font-size: 11px; text-transform: uppercase; font-weight: 700; color: #166534; letter-spacing: 0.5px;">Payment Amount</div>
+          <div style="font-size: 26px; font-weight: 800; color: #15803d; margin-top: 2px;">
+            ${formatMoney(payment.amount, payment.currency)}
+          </div>
+          <div style="font-size: 11px; color: #64748b; margin-top: 2px;">Date: ${payment.payment_date}</div>
+        </div>
+        <div style="text-align: right;">
+          <div style="font-size: 11px; text-transform: uppercase; color: #64748b; font-weight: 600;">Payer / Client</div>
+          <div style="font-size: 15px; font-weight: 700; color: #0f172a;">${payment.client_name || 'Client'}</div>
+          ${payment.invoice_number ? `<div style="font-size: 12px; color: #0284c7; font-weight: 600; margin-top: 3px;">Invoice: ${payment.invoice_number}</div>` : ''}
+        </div>
+      </div>
+
+      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 18px; font-size: 12px;">
+        <div style="background: #f8fafc; padding: 12px; border-radius: 8px; border: 1px solid #e2e8f0;">
+          <div style="color: #64748b; margin-bottom: 2px;">Payment Method</div>
+          <div style="font-weight: 700; color: #0f172a;">${payment.payment_method || 'Bank Transfer'}</div>
+        </div>
+        <div style="background: #f8fafc; padding: 12px; border-radius: 8px; border: 1px solid #e2e8f0;">
+          <div style="color: #64748b; margin-bottom: 2px;">Reference / Txn #</div>
+          <div style="font-weight: 700; color: #0f172a;">${payment.reference_number || '—'}</div>
+        </div>
+      </div>
+
+      ${payment.notes ? `
+        <div style="background: #fffbeb; border: 1px solid #fef3c7; border-radius: 8px; padding: 12px; margin-bottom: 18px;">
+          <div style="font-size: 11px; font-weight: 700; color: #b45309; text-transform: uppercase; margin-bottom: 4px;">Payment Remarks / Notes</div>
+          <div style="font-size: 12px; color: #92400e;">${payment.notes}</div>
+        </div>
+      ` : ''}
+
+      <div style="font-size: 11px; color: #94a3b8; text-align: center; border-top: 1px dashed #e2e8f0; padding-top: 12px;">
+        Official receipt recorded in system. Click below to view the full printable receipt or download the PDF copy.
+      </div>
+    `;
+
+    document.getElementById('btn-receipt-view-html').href = `/api/payments/${payment.id}/receipt/html${tokenParam}`;
+    document.getElementById('btn-receipt-download-pdf').href = `/api/payments/${payment.id}/pdf${tokenParam ? tokenParam + '&download=true' : '?download=true'}`;
+
+    document.getElementById('modal-receipt').classList.add('open');
+  } catch (err) {
+    showToast('Failed to load receipt: ' + err.message, 'error');
+  }
+}
 
 // 3. Payment Reversal Confirm Handler
 document.getElementById('btn-confirm-reversal').addEventListener('click', async () => {

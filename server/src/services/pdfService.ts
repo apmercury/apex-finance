@@ -276,7 +276,8 @@ export class PdfService {
    */
   public static renderReceiptHtml(companyId: string, paymentId: string): string {
     const payment = queryOne(
-      `SELECT p.*, c.company_name, c.email as client_email, i.invoice_number, i.total_amount as invoice_total
+      `SELECT p.*, c.company_name, c.email as client_email, c.phone as client_phone, c.address as client_address, c.tax_id as client_tax_id,
+              i.invoice_number, i.total_amount as invoice_total, i.balance_due as invoice_balance, i.currency as invoice_currency, i.issue_date as invoice_date
        FROM payments p
        JOIN clients c ON p.client_id = c.id
        LEFT JOIN invoices i ON p.invoice_id = i.id
@@ -285,53 +286,316 @@ export class PdfService {
     );
     if (!payment) throw new Error('Payment not found');
 
-    const company = queryOne(`SELECT * FROM companies WHERE id = ?`, [companyId]);
+    const company = queryOne(`SELECT * FROM companies WHERE id = ?`, [companyId]) || {
+      name: 'Apex Finance Ltd',
+      email: 'finance@apexfin.com',
+      phone: '+233 30 200 1234',
+      address: 'Financial District, Accra, Ghana',
+      tax_identification_number: 'C001298402',
+      primary_color: '#0284c7'
+    };
+
+    const primaryColor = company.primary_color || '#0284c7';
+    const formattedAmount = SafeMoney.format(payment.amount, payment.currency + ' ');
 
     return `
       <!DOCTYPE html>
-      <html>
+      <html lang="en">
       <head>
         <meta charset="utf-8">
-        <title>Receipt ${payment.payment_number}</title>
+        <title>Payment Receipt — ${payment.payment_number}</title>
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <link rel="preconnect" href="https://fonts.googleapis.com">
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
         <style>
-          body { font-family: Inter, sans-serif; padding: 40px; color: #0f172a; }
-          .header { border-bottom: 2px solid #0284c7; padding-bottom: 16px; margin-bottom: 24px; display: flex; justify-content: space-between; }
-          .title { font-size: 24px; font-weight: 800; color: #0284c7; }
-          .amount-card { background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 8px; padding: 24px; text-align: center; margin: 24px 0; }
-          .amount { font-size: 32px; font-weight: 800; color: #15803d; }
-          table { width: 100%; border-collapse: collapse; margin-top: 16px; }
-          td { padding: 10px 0; border-bottom: 1px solid #e2e8f0; }
-          td:last-child { text-align: right; font-weight: 600; }
+          @media print {
+            .no-print { display: none !important; }
+            body { padding: 0 !important; background: white !important; }
+            .receipt-container { box-shadow: none !important; border: 1px solid #e2e8f0 !important; }
+          }
+          * { box-sizing: border-box; margin: 0; padding: 0; }
+          body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            background: #f8fafc;
+            color: #0f172a;
+            padding: 30px 16px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+          }
+          .receipt-container {
+            width: 100%;
+            max-width: 720px;
+            background: #ffffff;
+            border-radius: 14px;
+            border: 1px solid #e2e8f0;
+            box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.05), 0 8px 10px -6px rgba(0, 0, 0, 0.01);
+            padding: 36px 40px;
+          }
+          .print-bar {
+            width: 100%;
+            max-width: 720px;
+            display: flex;
+            justify-content: flex-end;
+            gap: 10px;
+            margin-bottom: 16px;
+          }
+          .btn-print {
+            background: #0f172a;
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 8px;
+            font-size: 13px;
+            font-weight: 600;
+            cursor: pointer;
+          }
+          .receipt-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            border-bottom: 2px solid ${primaryColor};
+            padding-bottom: 20px;
+            margin-bottom: 24px;
+          }
+          .company-name {
+            font-size: 20px;
+            font-weight: 800;
+            color: #0f172a;
+          }
+          .company-sub {
+            font-size: 12px;
+            color: #64748b;
+            margin-top: 3px;
+            line-height: 1.4;
+          }
+          .receipt-tag {
+            text-align: right;
+          }
+          .receipt-title {
+            font-size: 16px;
+            font-weight: 800;
+            letter-spacing: 1px;
+            color: ${primaryColor};
+            text-transform: uppercase;
+          }
+          .receipt-num {
+            font-size: 14px;
+            font-weight: 700;
+            color: #0f172a;
+            margin-top: 4px;
+          }
+          .receipt-date {
+            font-size: 12px;
+            color: #64748b;
+            margin-top: 2px;
+          }
+          .hero-amount-card {
+            background: #f0fdf4;
+            border: 1px solid #bbf7d0;
+            border-radius: 12px;
+            padding: 20px 24px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 24px;
+          }
+          .hero-amount {
+            font-size: 28px;
+            font-weight: 800;
+            color: #15803d;
+          }
+          .badge-paid {
+            background: #dcfce7;
+            color: #15803d;
+            font-size: 11px;
+            font-weight: 700;
+            padding: 4px 10px;
+            border-radius: 20px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+          }
+          .grid-2 {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 24px;
+            margin-bottom: 24px;
+          }
+          .section-card {
+            background: #f8fafc;
+            border: 1px solid #e2e8f0;
+            border-radius: 10px;
+            padding: 16px 18px;
+          }
+          .section-title {
+            font-size: 11px;
+            font-weight: 700;
+            color: #64748b;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 10px;
+            border-bottom: 1px solid #e2e8f0;
+            padding-bottom: 6px;
+          }
+          .data-row {
+            display: flex;
+            justify-content: space-between;
+            font-size: 12px;
+            padding: 4px 0;
+            color: #334155;
+          }
+          .data-label {
+            color: #64748b;
+          }
+          .data-val {
+            font-weight: 600;
+            text-align: right;
+            color: #0f172a;
+          }
+          .notes-box {
+            background: #fffbeb;
+            border: 1px solid #fef3c7;
+            border-radius: 10px;
+            padding: 14px 18px;
+            margin-bottom: 24px;
+          }
+          .notes-label {
+            font-size: 11px;
+            font-weight: 700;
+            color: #b45309;
+            text-transform: uppercase;
+            margin-bottom: 4px;
+          }
+          .notes-text {
+            font-size: 13px;
+            color: #92400e;
+            line-height: 1.4;
+          }
+          .receipt-footer {
+            border-top: 1px solid #e2e8f0;
+            padding-top: 18px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 11px;
+            color: #94a3b8;
+          }
         </style>
       </head>
       <body>
-        <div class="header">
-          <div>
-            <div class="title">OFFICIAL PAYMENT RECEIPT</div>
-            <div style="font-size: 13px; color: #64748b;">${company?.name || 'Apex Finance'}</div>
-          </div>
-          <div style="text-align: right;">
-            <div style="font-weight: 700;">${payment.payment_number}</div>
-            <div style="color: #64748b;">Date: ${payment.payment_date}</div>
-          </div>
+        <div class="print-bar no-print">
+          <button class="btn-print" onclick="window.print()">🖨️ Print Receipt</button>
         </div>
 
-        <div class="amount-card">
-          <div style="font-size: 12px; text-transform: uppercase; color: #166534; font-weight: 600;">Payment Received</div>
-          <div class="amount">${SafeMoney.format(payment.amount, payment.currency + ' ')}</div>
-          <div style="color: #15803d; font-size: 13px; margin-top: 4px;">Status: ${payment.status}</div>
-        </div>
+        <div class="receipt-container">
+          <div class="receipt-header">
+            <div>
+              <div class="company-name">${company.name || 'Apex Finance Ltd'}</div>
+              <div class="company-sub">
+                ${company.address ? `<div>${company.address}</div>` : ''}
+                ${company.email ? `<div>Email: ${company.email}</div>` : ''}
+                ${company.phone ? `<div>Phone: ${company.phone}</div>` : ''}
+                ${company.tax_identification_number ? `<div>Tax ID / TIN: ${company.tax_identification_number}</div>` : ''}
+              </div>
+            </div>
+            <div class="receipt-tag">
+              <div class="receipt-title">Official Receipt</div>
+              <div class="receipt-num">${payment.payment_number}</div>
+              <div class="receipt-date">Date: ${payment.payment_date}</div>
+            </div>
+          </div>
 
-        <table>
-          <tr><td>Received From:</td><td>${payment.company_name}</td></tr>
-          <tr><td>Payment Method:</td><td>${payment.payment_method}</td></tr>
-          ${payment.reference_number ? `<tr><td>Reference / Check #:</td><td>${payment.reference_number}</td></tr>` : ''}
-          ${payment.invoice_number ? `<tr><td>Applied to Invoice:</td><td>${payment.invoice_number}</td></tr>` : ''}
-          ${payment.notes ? `<tr><td>Notes:</td><td>${payment.notes}</td></tr>` : ''}
-        </table>
+          <div class="hero-amount-card">
+            <div>
+              <div style="font-size: 12px; font-weight: 700; color: #166534; text-transform: uppercase;">Amount Received</div>
+              <div class="hero-amount">${formattedAmount}</div>
+            </div>
+            <div>
+              <span class="badge-paid">✓ ${payment.status || 'Completed'}</span>
+            </div>
+          </div>
 
-        <div style="margin-top: 40px; text-align: center; font-size: 12px; color: #94a3b8;">
-          This is an official computer-generated receipt issued by ${company?.name || 'Apex Finance SaaS'}.
+          <div class="grid-2">
+            <div class="section-card">
+              <div class="section-title">Received From (Client)</div>
+              <div class="data-row">
+                <span class="data-label">Client Name:</span>
+                <span class="data-val">${payment.company_name}</span>
+              </div>
+              ${payment.client_email ? `
+                <div class="data-row">
+                  <span class="data-label">Email:</span>
+                  <span class="data-val">${payment.client_email}</span>
+                </div>
+              ` : ''}
+              ${payment.client_phone ? `
+                <div class="data-row">
+                  <span class="data-label">Phone:</span>
+                  <span class="data-val">${payment.client_phone}</span>
+                </div>
+              ` : ''}
+              ${payment.client_address ? `
+                <div class="data-row">
+                  <span class="data-label">Address:</span>
+                  <span class="data-val">${payment.client_address}</span>
+                </div>
+              ` : ''}
+              ${payment.client_tax_id ? `
+                <div class="data-row">
+                  <span class="data-label">Tax ID:</span>
+                  <span class="data-val">${payment.client_tax_id}</span>
+                </div>
+              ` : ''}
+            </div>
+
+            <div class="section-card">
+              <div class="section-title">Payment Breakdown</div>
+              <div class="data-row">
+                <span class="data-label">Payment Method:</span>
+                <span class="data-val">${payment.payment_method || 'Bank Transfer'}</span>
+              </div>
+              ${payment.reference_number ? `
+                <div class="data-row">
+                  <span class="data-label">Reference / Txn #:</span>
+                  <span class="data-val">${payment.reference_number}</span>
+                </div>
+              ` : ''}
+              ${payment.invoice_number ? `
+                <div class="data-row">
+                  <span class="data-label">Applied To Invoice:</span>
+                  <span class="data-val">${payment.invoice_number}</span>
+                </div>
+                <div class="data-row">
+                  <span class="data-label">Invoice Total:</span>
+                  <span class="data-val">${SafeMoney.format(payment.invoice_total, (payment.invoice_currency || payment.currency) + ' ')}</span>
+                </div>
+                <div class="data-row">
+                  <span class="data-label">Remaining Balance:</span>
+                  <span class="data-val" style="color: ${payment.invoice_balance > 0 ? '#b45309' : '#15803d'};">
+                    ${SafeMoney.format(payment.invoice_balance || 0, (payment.invoice_currency || payment.currency) + ' ')}
+                  </span>
+                </div>
+              ` : `
+                <div class="data-row">
+                  <span class="data-label">Allocation:</span>
+                  <span class="data-val">General Account Credit</span>
+                </div>
+              `}
+            </div>
+          </div>
+
+          ${payment.notes ? `
+            <div class="notes-box">
+              <div class="notes-label">Payment Remarks / Notes</div>
+              <div class="notes-text">${payment.notes}</div>
+            </div>
+          ` : ''}
+
+          <div class="receipt-footer">
+            <div>Official automated receipt generated by ${company.name || 'Apex Finance SaaS'}.</div>
+            <div style="font-family: monospace;">TXID-${payment.id.slice(0, 8).toUpperCase()}</div>
+          </div>
         </div>
       </body>
       </html>

@@ -776,8 +776,10 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
     }
   }
 
-  if (pathname.match(/^\/api\/payments\/([A-Za-z0-9_-]+)\/pdf$/) && method === 'GET') {
-    const id = pathname.split('/')[3];
+  if (pathname.match(/^\/api\/payments\/([A-Za-z0-9_-]+)\/(pdf|receipt|receipt\/html)$/) && method === 'GET') {
+    const parts = pathname.split('/');
+    const id = parts[3];
+    const isHtmlMode = pathname.endsWith('/receipt/html') || query.format === 'html';
     let targetCompanyId = companyId;
     let p = PaymentService.getPaymentById(targetCompanyId, id);
 
@@ -799,6 +801,22 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
       sendJson(res, 404, { error: 'Payment not found or access denied' });
       return true;
     }
+
+    if (isHtmlMode) {
+      try {
+        const html = PdfService.renderReceiptHtml(targetCompanyId, id);
+        res.writeHead(200, {
+          'Content-Type': 'text/html; charset=utf-8',
+          'Content-Security-Policy': "default-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://fonts.gstatic.com;"
+        });
+        res.end(html);
+        return true;
+      } catch (e: any) {
+        sendJson(res, 500, { error: 'Receipt render failed: ' + e.message });
+        return true;
+      }
+    }
+
     try {
       const pdfPath = await PdfService.generateReceiptPdf(targetCompanyId, id);
       const stat = fs.statSync(pdfPath);
