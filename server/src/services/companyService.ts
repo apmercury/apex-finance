@@ -254,9 +254,6 @@ export class CompanyService {
         custom_notes: `Thank you for your business with ${data.name.trim()}!`
       });
 
-      // 8. Payment Note Templates (System Defaults)
-      PaymentNoteService.ensureDefaults(companyId);
-
       const newCompany = queryOne(`SELECT * FROM companies WHERE id = ?`, [companyId]);
 
       // Generate switched token

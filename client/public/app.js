@@ -2481,18 +2481,23 @@ async function loadPaymentNotes() {
     const notes = await api('/payment-notes');
     state.paymentNotes = notes;
 
+    if (!notes || notes.length === 0) {
+      select.innerHTML = '<option value="">-- No saved notes yet --</option>';
+      container.innerHTML = '<span style="font-size: 11px; color: #94a3b8; font-style: italic;">No saved notes yet. Type a note in the box below and click "Save Note As Preset" to save it for later use.</span>';
+      return;
+    }
+
     select.innerHTML = '<option value="">-- Load Saved Note --</option>' +
-      notes.map(n => `<option value="${n.id}" data-content="${encodeURIComponent(n.content)}" data-split="${n.split_ratio ?? ''}">${!n.is_system ? '⭐ ' : ''}${n.title}</option>`).join('');
+      notes.map(n => `<option value="${n.id}" data-content="${encodeURIComponent(n.content)}" data-split="${n.split_ratio ?? ''}">📝 ${n.title}</option>`).join('');
 
     container.innerHTML = notes.map(n => {
-      const isCustom = !n.is_system;
       const splitBadge = n.split_ratio ? `(${Math.round(n.split_ratio * 100)}%) ` : '';
       return `
-        <span class="btn-pay-preset-wrap" style="display: inline-flex; align-items: center; border-radius: 12px; background: ${isCustom ? '#ecfdf5' : 'rgba(99,102,241,0.08)'}; border: 1px solid ${isCustom ? '#a7f3d0' : 'rgba(99,102,241,0.2)'}; padding: 2px 8px; font-size: 11px;">
-          <button type="button" class="btn-pay-preset-action" data-note="${encodeURIComponent(n.content)}" data-split="${n.split_ratio ?? ''}" style="background: none; border: none; padding: 0; color: ${isCustom ? '#047857' : '#4f46e5'}; font-weight: 600; cursor: pointer; font-size: 11px;">
-            ${isCustom ? '⭐ ' : '⚡ '}${splitBadge}${n.title}
+        <span class="btn-pay-preset-wrap" style="display: inline-flex; align-items: center; border-radius: 12px; background: #f0fdf4; border: 1px solid #bbf7d0; padding: 2px 8px; font-size: 11px;">
+          <button type="button" class="btn-pay-preset-action" data-note="${encodeURIComponent(n.content)}" data-split="${n.split_ratio ?? ''}" style="background: none; border: none; padding: 0; color: #15803d; font-weight: 600; cursor: pointer; font-size: 11px;">
+            📝 ${splitBadge}${n.title}
           </button>
-          ${isCustom ? `<span class="btn-delete-saved-note" data-id="${n.id}" data-title="${n.title}" title="Delete this custom preset" style="margin-left: 6px; cursor: pointer; color: #ef4444; font-weight: bold; font-size: 13px; line-height: 1;">&times;</span>` : ''}
+          <span class="btn-delete-saved-note" data-id="${n.id}" data-title="${n.title}" title="Delete this saved note" style="margin-left: 6px; cursor: pointer; color: #ef4444; font-weight: bold; font-size: 13px; line-height: 1;">&times;</span>
         </span>
       `;
     }).join('');
