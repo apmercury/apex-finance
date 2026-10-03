@@ -1,0 +1,37 @@
+name: CI — Financial Integrity & Multi-Tenant Security Guard
+
+on:
+  push:
+    branches: [ main, 'feature/**' ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test:
+    name: Financial Math & Tenant Security Test Suite
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 📥 Check out repository code
+        uses: actions/checkout@v4
+
+      - name: 🟢 Set up Node.js runtime (v22)
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'npm'
+
+      - name: 📦 Install dependencies
+        run: npm ci
+
+      - name: 🔒 Audit dependencies for known vulnerabilities
+        run: npm audit --audit-level=high
+
+      - name: 💰 Run Section 39 Financial Calculation & Ledger Suite
+        run: npm run test:scenario39
+
+      - name: 🛡️ Run Multi-Tenant Data Isolation & RBAC Security Suite
+        run: npm run test:security
+
+      - name: 🚀 Run Full End-to-End (E2E) Integration Suite
+        run: npm run test:e2e
