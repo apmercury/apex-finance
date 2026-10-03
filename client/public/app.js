@@ -2135,11 +2135,18 @@ async function renderPlatform(container) {
   const suspendedCount = companies.filter(c => c.status === 'suspended').length;
 
   container.innerHTML = `
-    <div style="margin-bottom: 24px;">
-      <h1 style="font-size: 24px; font-weight: 800; color: #0f172a; letter-spacing: -0.02em;">Platform Administration</h1>
-      <p style="font-size: 13px; color: #64748b; margin-top: 2px;">
-        Global multi-tenant governance, company activation states, and cross-tenant management
-      </p>
+    <div style="margin-bottom: 24px; display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 16px;">
+      <div>
+        <h1 style="font-size: 24px; font-weight: 800; color: #0f172a; letter-spacing: -0.02em;">Platform Administration</h1>
+        <p style="font-size: 13px; color: #64748b; margin-top: 2px;">
+          Global multi-tenant governance, company activation states, and cross-tenant management
+        </p>
+      </div>
+      <div>
+        <button id="btn-platform-onboard-company" class="btn btn-primary" style="display: inline-flex; align-items: center; gap: 8px; font-weight: 600; padding: 9px 18px; border-radius: 8px; box-shadow: 0 4px 6px -1px rgba(79, 70, 229, 0.25);">
+          <span>➕ Onboard New Company</span>
+        </button>
+      </div>
     </div>
 
     <!-- Platform Stats Cards -->
@@ -2209,6 +2216,15 @@ async function renderPlatform(container) {
       </table>
     </div>
   `;
+
+  // Onboard New Company button (Platform Admin)
+  const btnPlatformOnboard = container.querySelector('#btn-platform-onboard-company');
+  if (btnPlatformOnboard) {
+    btnPlatformOnboard.addEventListener('click', () => {
+      const modal = document.getElementById('modal-onboard');
+      if (modal) modal.classList.add('open');
+    });
+  }
 
   // Enter company
   container.querySelectorAll('.btn-platform-switch').forEach(btn => {
@@ -3126,10 +3142,13 @@ function setupEventListeners() {
         formOnboard.reset();
         showToast(`Company "${newCompName}" successfully created!`, 'success');
 
-        // Refresh user companies and switch to new company
+        // Refresh user companies list
         const myComps = await api('/companies/my-companies');
         state.myCompanies = myComps;
-        if (newCompId) {
+
+        if (state.activeNav === 'platform') {
+          renderPlatform(document.getElementById('app-view'));
+        } else if (newCompId) {
           await switchCompany(newCompId);
         }
       } catch (err) {
