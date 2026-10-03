@@ -241,7 +241,29 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
         { userId: auth.userId, userName: auth.fullName },
         body
       );
-      sendJson(res, 201, member);
+
+      const company = CompanyService.getCompanyById(companyId);
+      const host = req.headers['host'] || 'localhost:3000';
+      const protocol = (req.headers['x-forwarded-proto'] as string) || (host.startsWith('localhost') ? 'http' : 'https');
+      const appUrl = `${protocol}://${host}`;
+
+      // Dispatch automated background invitation email via Namecheap / cPanel SMTP
+      EmailService.sendInvitationEmail({
+        toEmail: body.email.trim(),
+        fullName: body.fullName.trim(),
+        companyName: company?.name || 'Your Organization',
+        inviterName: auth.fullName || 'Administrator',
+        roleName: body.roleName || 'Staff',
+        temporaryPassword: 'welcome123',
+        appUrl
+      }).catch(err => {
+        console.error('[EmailService] Background invite email error:', err);
+      });
+
+      sendJson(res, 201, {
+        member,
+        message: `Invitation successfully processed. Email dispatched to ${body.email.trim()}`
+      });
       return true;
     } catch (e: any) {
       sendJson(res, 400, { error: e.message });
