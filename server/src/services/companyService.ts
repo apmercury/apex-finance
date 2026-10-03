@@ -439,6 +439,13 @@ export class CompanyService {
   }
 
   /**
+   * Get single company details by ID
+   */
+  public static getCompanyById(companyId: string): any {
+    return queryOne(`SELECT * FROM companies WHERE id = ?`, [companyId]);
+  }
+
+  /**
    * Platform Admin: Get all platform companies with summary statistics
    */
   public static getPlatformCompanies(): any[] {
