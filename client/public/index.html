@@ -819,40 +819,23 @@
       <form id="form-login">
         <div class="form-group">
           <label class="form-label">Email Address</label>
-          <input type="email" id="login-email" class="form-control" required placeholder="name@company.com" value="admin@apexfin.com">
+          <input type="email" id="login-email" class="form-control" required placeholder="name@company.com" autocomplete="username">
         </div>
         <div class="form-group">
           <label class="form-label">Password</label>
-          <input type="password" id="login-password" class="form-control" required placeholder="••••••••" value="admin123">
+          <input type="password" id="login-password" class="form-control" required placeholder="••••••••" autocomplete="current-password">
         </div>
         <button type="submit" class="btn btn-primary" style="width: 100%; justify-content: center; padding: 10px; font-weight: 700; margin-top: 8px;">
           Sign In
         </button>
       </form>
 
-      <!-- Quick Demo Login Personas -->
-      <div style="margin-top: 24px; padding-top: 20px; border-top: 1px solid var(--border);">
+      <!-- Quick demo logins: rendered by app.js only when the server runs in demo mode -->
+      <div id="demo-logins" style="display: none; margin-top: 24px; padding-top: 20px; border-top: 1px solid var(--border);">
         <div style="font-size: 11px; font-weight: 700; text-transform: uppercase; color: #64748b; margin-bottom: 10px; letter-spacing: 0.05em;">
           Fast Demo One-Click Sign In:
         </div>
-        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
-          <button type="button" class="demo-account-chip" data-email="admin@apexfin.com" data-pass="admin123">
-            <span style="font-weight: 700; font-size: 12px; color: #0284c7;">⚡ Alexander (Admin)</span>
-            <span style="font-size: 10px; color: #64748b;">Apex Tech • GHS</span>
-          </button>
-          <button type="button" class="demo-account-chip" data-email="finance@apexfin.com" data-pass="finance123">
-            <span style="font-weight: 700; font-size: 12px; color: #16a34a;">💼 Kofi Mensah</span>
-            <span style="font-size: 10px; color: #64748b;">Finance Mgr • GHS</span>
-          </button>
-          <button type="button" class="demo-account-chip" data-email="sarah@stellarmaritime.com" data-pass="sarah123">
-            <span style="font-weight: 700; font-size: 12px; color: #0d9488;">🚢 Sarah Jenkins</span>
-            <span style="font-size: 10px; color: #64748b;">Director • Stellar (USD)</span>
-          </button>
-          <button type="button" class="demo-account-chip" data-email="staff@apexfin.com" data-pass="staff123">
-            <span style="font-weight: 700; font-size: 12px; color: #64748b;">📝 Ama Osei</span>
-            <span style="font-size: 10px; color: #64748b;">Staff Member</span>
-          </button>
-        </div>
+        <div id="demo-logins-list" style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;"></div>
       </div>
     </div>
   </div>

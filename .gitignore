@@ -1,8 +1,22 @@
+# OS / editor
 .DS_Store
+Thumbs.db
+
+# Dependencies
 node_modules/
+
+# Secrets — never commit real environment files
+.env
+.env.*
+!.env.example
+
+# Runtime data: database, generated PDFs, backups, screenshots (mounted as a volume in Docker)
+storage/*
+!storage/.gitkeep
+*.sqlite
 *.sqlite-shm
 *.sqlite-wal
-storage/dashboard_rendered.png
-storage/comp_*
-storage/**/*.pdf
+backups/
 
+# Generated artifacts
+repomix-output.xml

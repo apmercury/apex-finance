@@ -35,3 +35,14 @@ jobs:
 
       - name: 🚀 Run Full End-to-End (E2E) Integration Suite
         run: npm run test:e2e
+
+  docker:
+    name: Production Docker Image Smoke Test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 📥 Check out repository code
+        uses: actions/checkout@v4
+
+      - name: 🐳 Build image and smoke-test it in production mode
+        run: bash deploy/smoke-test.sh
