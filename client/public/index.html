@@ -253,7 +253,7 @@
               </div>
               <div class="form-group">
                 <label class="form-label">Discount Value</label>
-                <input type="number" step="0.01" class="form-control" id="inv-discount-val" value="0">
+                <input type="number" step="0.01" min="0" class="form-control" id="inv-discount-val" value="0">
               </div>
             </div>
 
@@ -325,7 +325,7 @@
           <div class="form-row">
             <div class="form-group">
               <label class="form-label">Payment Amount *</label>
-              <input type="number" step="0.01" class="form-control" id="pay-amount" required placeholder="0.00">
+              <input type="number" step="0.01" class="form-control" id="pay-amount" required min="0.01" placeholder="0.00">
             </div>
             <div class="form-group">
               <label class="form-label">Currency *</label>
@@ -536,7 +536,7 @@
           <div class="form-row">
             <div class="form-group">
               <label class="form-label">Amount *</label>
-              <input type="number" step="0.01" class="form-control" id="exp-amount" required placeholder="0.00">
+              <input type="number" step="0.01" class="form-control" id="exp-amount" required min="0.01" placeholder="0.00">
             </div>
             <div class="form-group">
               <label class="form-label">Currency *</label>
@@ -780,6 +780,32 @@
   </div>
 
   <!-- AUTHENTICATION / LOGIN OVERLAY -->
+  <!-- Forced password change (accounts created with a temporary password) -->
+  <div class="auth-backdrop" id="password-change-overlay" style="display: none;">
+    <div class="auth-card">
+      <div style="text-align: center; margin-bottom: 24px;">
+        <h2 style="font-size: 20px; font-weight: 800; color: #0f172a; letter-spacing: -0.02em;">Choose a new password</h2>
+        <p style="font-size: 13px; color: #64748b; margin-top: 4px;">You signed in with a temporary password. Set your own password to continue.</p>
+      </div>
+      <form id="form-password-change">
+        <div class="form-group">
+          <label class="form-label" for="pwc-current">Temporary password</label>
+          <input type="password" id="pwc-current" class="form-control" required autocomplete="current-password">
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="pwc-new">New password (at least 10 characters)</label>
+          <input type="password" id="pwc-new" class="form-control" required minlength="10" autocomplete="new-password">
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="pwc-confirm">Confirm new password</label>
+          <input type="password" id="pwc-confirm" class="form-control" required minlength="10" autocomplete="new-password">
+        </div>
+        <button type="submit" class="btn btn-primary" style="width: 100%; justify-content: center;">Save password and continue</button>
+        <button type="button" id="pwc-logout" class="btn btn-secondary" style="width: 100%; justify-content: center; margin-top: 8px;">Sign out</button>
+      </form>
+    </div>
+  </div>
+
   <div class="auth-backdrop" id="auth-overlay" style="display: none;">
     <div class="auth-card">
       <div style="text-align: center; margin-bottom: 24px;">

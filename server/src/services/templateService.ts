@@ -87,6 +87,9 @@ export class TemplateService {
   }
 
   public static setDefault(companyId: string, templateId: string): void {
+    if (!queryOne(`SELECT 1 FROM invoice_templates WHERE id = ? AND company_id = ?`, [templateId, companyId])) {
+      throw new Error('Template not found');
+    }
     execute(`UPDATE invoice_templates SET is_default = 0 WHERE company_id = ?`, [companyId]);
     execute(`UPDATE invoice_templates SET is_default = 1 WHERE id = ? AND company_id = ?`, [templateId, companyId]);
   }

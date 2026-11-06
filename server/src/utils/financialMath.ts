@@ -145,6 +145,21 @@ export class SafeMoney {
     return this.toUnits(val) === 0n;
   }
 
+  /**
+   * Round to a currency's minor-unit precision (e.g. 2 for cents), half away from zero,
+   * using integer arithmetic. Every amount a client can be billed or pay must pass through this,
+   * otherwise sub-cent remainders leave invoices that can never be fully paid.
+   */
+  public static roundToPrecision(val: number | string, decimals: number = 2): number {
+    const d = Math.max(0, Math.min(4, Math.trunc(decimals)));
+    if (d === 4) return this.fromUnits(this.toUnits(val));
+    const units = this.toUnits(val);
+    const step = 10n ** BigInt(4 - d);
+    const half = step / 2n;
+    const rounded = units >= 0n ? ((units + half) / step) * step : -(((-units + half) / step) * step);
+    return this.fromUnits(rounded);
+  }
+
   public static round(val: number | string, decimals: number = 2): number {
     const factor = Math.pow(10, decimals);
     const num = typeof val === 'number' ? val : parseFloat(val);

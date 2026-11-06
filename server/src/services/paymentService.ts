@@ -1,4 +1,4 @@
-import { execute, queryAll, queryOne, runTransaction, sanitizeFk } from '../db/database.ts';
+import { execute, queryAll, queryOne, runTransaction, sanitizeFk, sanitizeTenantFk, requireTenantClient } from '../db/database.ts';
 import { SafeMoney } from '../utils/financialMath.ts';
 import { CurrencyService } from './currencyService.ts';
 import { ClientService } from './clientService.ts';
@@ -6,6 +6,7 @@ import { InvoiceService } from './invoiceService.ts';
 import { AuditService } from './auditService.ts';
 import { NotificationService } from './notificationService.ts';
 import { sseService } from './sseService.ts';
+import { requireCompanyCurrency, requireIsoDate, requirePaymentMethod, optionalExchangeRate } from '../utils/validation.ts';
 import * as crypto from 'node:crypto';
 
 // ============================================================================
@@ -97,10 +98,21 @@ export class PaymentService {
    */
   public static recordPayment(dto: RecordPaymentDTO): any {
     return runTransaction(() => {
-      const paymentAmount = Number(dto.amount);
-      if (isNaN(paymentAmount) || paymentAmount <= 0) {
+      dto.currency = requireCompanyCurrency(dto.company_id, dto.currency);
+      const rawAmount = Number(dto.amount);
+      if (!Number.isFinite(rawAmount) || rawAmount <= 0) {
         throw new Error('Payment amount must be greater than zero');
       }
+      // Round to the currency's minor unit so payments can exactly settle invoice balances
+      const precision = queryOne<{ decimal_precision: number }>(
+        `SELECT decimal_precision FROM currencies WHERE company_id = ? AND code = ?`,
+        [dto.company_id, dto.currency]
+      )?.decimal_precision ?? 2;
+      const paymentAmount = SafeMoney.roundToPrecision(rawAmount, precision);
+      if (paymentAmount <= 0) throw new Error('Payment amount must be greater than zero');
+      requireIsoDate(dto.payment_date, 'Payment date');
+      dto.payment_method = requirePaymentMethod(dto.payment_method) as RecordPaymentDTO['payment_method'];
+      dto.exchange_rate = optionalExchangeRate(dto.exchange_rate);
 
       // Check invoice if associated
       let invoice: any = null;
@@ -113,6 +125,14 @@ export class PaymentService {
         );
         if (!invoice) {
           throw new Error('Invoice not found');
+        }
+        // A payment against an invoice always belongs to that invoice's client
+        if (!dto.client_id) dto.client_id = invoice.client_id;
+        if (dto.client_id !== invoice.client_id) {
+          throw new Error('Payment client does not match the invoice client');
+        }
+        if (invoice.status === 'Cancelled' || invoice.status === 'Draft') {
+          throw new Error(`Cannot record a payment against a ${invoice.status} invoice`);
         }
 
         // Validate currency alignment or exchange rate
@@ -137,6 +157,8 @@ export class PaymentService {
         }
       }
 
+      requireTenantClient(dto.company_id, dto.client_id);
+
       // Base currency conversion
       const baseCurr = CurrencyService.getBaseCurrency(dto.company_id).code;
       if (!effectiveRate) {
@@ -159,7 +181,7 @@ export class PaymentService {
           dto.company_id,
           paymentNumber,
           dto.client_id,
-          sanitizeFk('invoices', dto.invoice_id),
+          sanitizeTenantFk('invoices', dto.invoice_id, dto.company_id),
           paymentAmount,
           dto.currency.toUpperCase(),
           effectiveRate,

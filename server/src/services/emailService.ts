@@ -74,7 +74,7 @@ export class EmailService {
       companyName,
       inviterName,
       roleName,
-      temporaryPassword = 'welcome123',
+      temporaryPassword, // only set for newly created accounts
       appUrl = process.env.APP_URL || 'http://localhost:3000'
     } = options;
 
@@ -129,7 +129,9 @@ export class EmailService {
                       <strong>Email:</strong> <span style="font-family: monospace; color: #4338ca;">${escapeHtml(toEmail)}</span>
                     </div>
                     <div style="font-size: 14px; margin-bottom: 8px; color: #1e293b;">
-                      <strong>Temporary Password:</strong> <span style="font-family: monospace; background: #e0e7ff; color: #3730a3; padding: 2px 6px; border-radius: 4px; font-weight: 600;">${escapeHtml(temporaryPassword)}</span>
+                      ${temporaryPassword
+                        ? `<strong>Temporary Password:</strong> <span style="font-family: monospace; background: #e0e7ff; color: #3730a3; padding: 2px 6px; border-radius: 4px; font-weight: 600;">${escapeHtml(temporaryPassword)}</span>`
+                        : '<strong>Password:</strong> use your existing ApexFinance password'}
                     </div>
                     <div style="font-size: 14px; color: #1e293b;">
                       <strong>Assigned Role:</strong> <span style="color: #059669; font-weight: 600;">${escapeHtml(roleName)}</span>
@@ -151,7 +153,7 @@ export class EmailService {
 
               <!-- Security Notice -->
               <div style="background-color: #fefce8; border: 1px solid #fef08a; border-radius: 6px; padding: 12px; font-size: 13px; color: #854d0e; margin-bottom: 20px;">
-                🔒 <strong>Security Tip:</strong> For your security, please update your password immediately in your account settings after logging in.
+                🔒 <strong>Security Tip:</strong> ${temporaryPassword ? 'You will be asked to choose a new password the first time you log in.' : 'Never share your password with anyone.'}
               </div>
 
               <p style="font-size: 13px; color: #64748b; margin: 0;">
@@ -184,12 +186,12 @@ ${inviterName} has invited you to collaborate with ${companyName} on ApexFinance
 
 Your Login Credentials:
 - Email: ${toEmail}
-- Temporary Password: ${temporaryPassword}
+- ${temporaryPassword ? `Temporary Password: ${temporaryPassword}` : 'Password: use your existing ApexFinance password'}
 - Assigned Role: ${roleName}
 
 Log in here: ${loginUrl}
 
-Please update your temporary password after logging in for account security.
+${temporaryPassword ? 'You will be asked to choose a new password the first time you log in.' : ''}
 
 Best regards,
 ${companyName} via ApexFinance
@@ -204,7 +206,10 @@ ${companyName} via ApexFinance
       console.log(`To: ${toEmail}`);
       console.log(`Subject: ${subject}`);
       console.log(`Company: ${companyName} | Role: ${roleName}`);
-      console.log(`Temp Password: ${temporaryPassword}`);
+      // Never write credentials to production logs
+      if (temporaryPassword && process.env.NODE_ENV !== 'production') {
+        console.log(`Temp Password: ${temporaryPassword}`);
+      }
       console.log(`Login URL: ${loginUrl}`);
       console.log(`================================================================\n`);
       return { success: true, simulated: true };

@@ -1,10 +1,11 @@
-import { execute, queryAll, queryOne, runTransaction, sanitizeFk } from '../db/database.ts';
+import { execute, queryAll, queryOne, runTransaction, sanitizeFk, sanitizeTenantFk, requireTenantClient } from '../db/database.ts';
 import { SafeMoney } from '../utils/financialMath.ts';
 import { CurrencyService } from './currencyService.ts';
 import { ClientService } from './clientService.ts';
 import { AuditService } from './auditService.ts';
 import { NotificationService } from './notificationService.ts';
 import { sseService } from './sseService.ts';
+import { requireCompanyCurrency, requireIsoDate, requireNumberInRange, requireText, optionalExchangeRate } from '../utils/validation.ts';
 import * as crypto from 'node:crypto';
 
 export interface InvoiceItemInput {
@@ -75,12 +76,13 @@ export class InvoiceService {
       return 'Paid';
     }
 
-    if (amountPaid > 0 && amountPaid < totalAmount) {
-      return 'Partially Paid';
-    }
-
+    // Past due with money outstanding is Overdue, even if partly paid
     if (dueDate < today && balance > 0) {
       return 'Overdue';
+    }
+
+    if (amountPaid > 0) {
+      return 'Partially Paid';
     }
 
     return 'Unpaid';
@@ -90,57 +92,83 @@ export class InvoiceService {
    * Recalculate invoice totals, line items, taxes, discounts, and exchange rates safely
    */
   public static computeInvoiceTotals(companyId: string, currency: string, items: InvoiceItemInput[], discountType: string = 'none', discountValue: number = 0, exchangeRate?: number) {
+    if (!Array.isArray(items) || items.length === 0) throw new Error('An invoice needs at least one line item');
+    if (items.length > 500) throw new Error('An invoice can have at most 500 line items');
+    if (!['none', 'percent', 'fixed'].includes(discountType)) throw new Error('Discount type must be none, percent or fixed');
+    if (discountType === 'percent') requireNumberInRange(discountValue, 'Discount percentage', 0, 100);
+    if (discountType === 'fixed') requireNumberInRange(discountValue, 'Discount amount', 0, Number.MAX_SAFE_INTEGER);
+
     const baseCurr = CurrencyService.getBaseCurrency(companyId).code;
     const rate = exchangeRate || CurrencyService.getExchangeRate(companyId, currency, baseCurr);
 
-    let subtotal = 0;
-    let totalTax = 0;
+    // Every billed amount is rounded to the currency's minor unit (cents for most currencies)
+    const precision = queryOne<{ decimal_precision: number }>(
+      `SELECT decimal_precision FROM currencies WHERE company_id = ? AND code = ?`,
+      [companyId, String(currency).toUpperCase()]
+    )?.decimal_precision ?? 2;
+    const r = (v: number) => SafeMoney.roundToPrecision(v, precision);
 
-    const calculatedItems = items.map((item, index) => {
-      const qty = Number(item.quantity) || 1;
-      const price = Number(item.unit_price) || 0;
-      const discPercent = Number(item.discount_percent) || 0;
+    // Pass 1: validate lines and compute net line amounts (after any per-line discount)
+    const lines = items.map((item, index) => {
+      const label = `Line ${index + 1}`;
+      const description = requireText(item.description, `${label} description`);
+      const qty = requireNumberInRange(item.quantity, `${label} quantity`, 0, 1e9, { minExclusive: true });
+      const price = requireNumberInRange(item.unit_price, `${label} unit price`, 0, 1e12);
+      const discPercent = item.discount_percent === undefined || item.discount_percent === null || (item.discount_percent as any) === ''
+        ? 0
+        : requireNumberInRange(item.discount_percent, `${label} discount`, 0, 100);
 
-      // Base line total = qty * price
-      const rawLine = SafeMoney.multiply(qty, price);
-      // Item discount
-      const itemDisc = discPercent > 0 ? SafeMoney.percentage(rawLine, discPercent) : 0;
+      const rawLine = r(SafeMoney.multiply(qty, price));
+      const itemDisc = discPercent > 0 ? r(SafeMoney.percentage(rawLine, discPercent)) : 0;
       const netLine = SafeMoney.subtract(rawLine, itemDisc);
 
-      // Tax calculation
       let taxPercentage = 0;
-      let taxAmount = 0;
       if (item.tax_rate_id) {
         const taxRate = queryOne(`SELECT percentage FROM tax_rates WHERE id = ? AND company_id = ?`, [item.tax_rate_id, companyId]);
-        if (taxRate) {
-          taxPercentage = taxRate.percentage;
-          taxAmount = SafeMoney.percentage(netLine, taxPercentage);
-        }
+        if (taxRate) taxPercentage = taxRate.percentage;
       }
+      return { item, index, description, qty, price, discPercent, netLine, taxPercentage };
+    });
 
-      subtotal = SafeMoney.add(subtotal, netLine);
+    const subtotal = lines.reduce((sum, l) => SafeMoney.add(sum, l.netLine), 0);
+
+    // Invoice-level discount, capped at the subtotal
+    let invoiceDiscountAmount = 0;
+    if (discountType === 'percent' && discountValue > 0) {
+      invoiceDiscountAmount = r(SafeMoney.percentage(subtotal, discountValue));
+    } else if (discountType === 'fixed' && discountValue > 0) {
+      invoiceDiscountAmount = r(SafeMoney.compare(discountValue, subtotal) > 0 ? subtotal : discountValue);
+    }
+
+    // Pass 2: spread the invoice discount across lines in proportion to their value and
+    // charge tax on the discounted amount. The last line absorbs rounding so the
+    // allocated shares always sum exactly to the discount.
+    let allocated = 0;
+    let totalTax = 0;
+    const calculatedItems = lines.map((l, i) => {
+      let lineDiscountShare = 0;
+      if (invoiceDiscountAmount > 0 && subtotal > 0) {
+        lineDiscountShare = i === lines.length - 1
+          ? SafeMoney.subtract(invoiceDiscountAmount, allocated)
+          : r((l.netLine / subtotal) * invoiceDiscountAmount);
+        allocated = SafeMoney.add(allocated, lineDiscountShare);
+      }
+      const taxableLine = SafeMoney.subtract(l.netLine, lineDiscountShare);
+      const taxAmount = l.taxPercentage > 0 ? r(SafeMoney.percentage(taxableLine, l.taxPercentage)) : 0;
       totalTax = SafeMoney.add(totalTax, taxAmount);
 
       return {
-        description: item.description,
-        quantity: qty,
-        unit_price: price,
-        discount_percent: discPercent,
-        tax_rate_id: item.tax_rate_id || null,
-        tax_rate_percentage: taxPercentage,
+        description: l.description,
+        quantity: l.qty,
+        unit_price: l.price,
+        discount_percent: l.discPercent,
+        tax_rate_id: l.item.tax_rate_id || null,
+        tax_rate_percentage: l.taxPercentage,
         tax_amount: taxAmount,
-        line_total: SafeMoney.add(netLine, taxAmount),
-        line_order: item.line_order ?? index
+        line_total: SafeMoney.add(l.netLine, taxAmount),
+        line_order: l.item.line_order ?? l.index
       };
     });
-
-    // Invoice level discount
-    let invoiceDiscountAmount = 0;
-    if (discountType === 'percent' && discountValue > 0) {
-      invoiceDiscountAmount = SafeMoney.percentage(subtotal, discountValue);
-    } else if (discountType === 'fixed' && discountValue > 0) {
-      invoiceDiscountAmount = Math.min(discountValue, subtotal);
-    }
 
     const netSubtotal = SafeMoney.subtract(subtotal, invoiceDiscountAmount);
     const grandTotal = SafeMoney.add(netSubtotal, totalTax);
@@ -163,6 +191,13 @@ export class InvoiceService {
    */
   public static createInvoice(dto: CreateInvoiceDTO): any {
     return runTransaction(() => {
+      requireTenantClient(dto.company_id, dto.client_id);
+      dto.currency = requireCompanyCurrency(dto.company_id, dto.currency);
+      requireIsoDate(dto.issue_date, 'Issue date');
+      requireIsoDate(dto.due_date, 'Due date');
+      if (dto.due_date < dto.issue_date) throw new Error('Due date cannot be before the issue date');
+      dto.exchange_rate = optionalExchangeRate(dto.exchange_rate);
+
       const invoiceId = crypto.randomUUID();
       const invoiceNumber = this.generateInvoiceNumber(dto.company_id);
 
@@ -191,7 +226,7 @@ export class InvoiceService {
           dto.company_id,
           invoiceNumber,
           dto.client_id,
-          sanitizeFk('invoice_templates', dto.template_id),
+          sanitizeTenantFk('invoice_templates', dto.template_id, dto.company_id),
           dto.issue_date,
           dto.due_date,
           dto.currency.toUpperCase(),
@@ -227,7 +262,7 @@ export class InvoiceService {
             item.quantity,
             item.unit_price,
             item.discount_percent,
-            sanitizeFk('tax_rates', item.tax_rate_id),
+            sanitizeTenantFk('tax_rates', item.tax_rate_id, dto.company_id),
             item.tax_rate_percentage,
             item.tax_amount,
             item.line_total,
@@ -408,6 +443,49 @@ export class InvoiceService {
     sseService.broadcast(companyId, 'invoice_updated', { invoiceId: id, status });
 
     return this.getInvoiceById(companyId, id);
+  }
+
+  /**
+   * Move every open invoice whose due date has passed to Overdue.
+   * Runs at startup and on a timer (see index.ts), since status otherwise only
+   * changes when a payment is recorded. Returns the number of invoices updated.
+   */
+  public static refreshOverdueStatuses(companyId?: string): number {
+    const today = new Date().toISOString().slice(0, 10);
+    const params: any[] = [today];
+    let sql = `SELECT id, company_id, client_id, invoice_number, status, due_date FROM invoices
+               WHERE status IN ('Unpaid', 'Partially Paid') AND balance_due > 0 AND due_date < ?`;
+    if (companyId) {
+      sql += ` AND company_id = ?`;
+      params.push(companyId);
+    }
+    const due = queryAll(sql, params);
+
+    for (const inv of due) {
+      runTransaction(() => {
+        execute(`UPDATE invoices SET status = 'Overdue', updated_at = datetime('now') WHERE id = ? AND status = ?`, [inv.id, inv.status]);
+        AuditService.log({
+          companyId: inv.company_id,
+          userName: 'System',
+          userRole: 'System',
+          action: 'INVOICE_OVERDUE',
+          entityType: 'INVOICE',
+          entityId: inv.id,
+          previousValue: { status: inv.status },
+          newValue: { status: 'Overdue', dueDate: inv.due_date }
+        });
+        NotificationService.create({
+          companyId: inv.company_id,
+          type: 'invoice_overdue',
+          title: `Invoice ${inv.invoice_number} is overdue`,
+          message: `Payment was due on ${inv.due_date}`,
+          link: `/invoices/${inv.id}`
+        });
+        ClientService.refreshClientBalances(inv.company_id, inv.client_id);
+      });
+      sseService.broadcast(inv.company_id, 'invoice_updated', { invoiceId: inv.id, status: 'Overdue' });
+    }
+    return due.length;
   }
 
   public static markAsSent(companyId: string, id: string, userId?: string, userName?: string): any {
