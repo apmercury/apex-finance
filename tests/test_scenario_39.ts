@@ -5,7 +5,8 @@ import { DashboardService } from '../server/src/services/dashboardService.ts';
 import { ReportService } from '../server/src/services/reportService.ts';
 import { AuditService } from '../server/src/services/auditService.ts';
 import { SafeMoney } from '../server/src/utils/financialMath.ts';
-import { queryOne } from '../server/src/db/database.ts';
+import { queryOne, execute } from '../server/src/db/database.ts';
+import { TaxService } from '../server/src/services/taxService.ts';
 
 function assert(condition: boolean, msg: string) {
   if (!condition) {
@@ -182,5 +183,83 @@ try {
   forcedPaidRejected = true;
 }
 assert(forcedPaidRejected, 'Setting status to Paid manually is rejected');
+
+const today = new Date().toISOString().slice(0, 10);
+const in30 = new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10);
+const daysAgo = (n: number) => new Date(Date.now() - n * 86400000).toISOString().slice(0, 10);
+
+// 13. Invoice discount reduces the taxable amount (regression)
+console.log('\n13. Verifying Tax Is Charged After Invoice Discount');
+const vat10 = TaxService.createTaxRate(companyId, { name: 'Test VAT 10%', code: 'TVAT10', percentage: 10, description: 'test' });
+const discounted = InvoiceService.createInvoice({
+  company_id: companyId, client_id: client.id, issue_date: today, due_date: in30, currency: 'USD', exchange_rate: 15.2,
+  discount_type: 'percent', discount_value: 10,
+  items: [
+    { description: 'Taxed service', quantity: 1, unit_price: 1000, tax_rate_id: vat10.id },
+    { description: 'Untaxed service', quantity: 1, unit_price: 1000 }
+  ]
+});
+console.log(`Subtotal ${discounted.subtotal}, discount ${discounted.discount_amount}, tax ${discounted.tax_amount}, total ${discounted.total_amount}`);
+assert(discounted.subtotal === 2000, 'Subtotal = 2,000');
+assert(discounted.discount_amount === 200, '10% invoice discount = 200');
+assert(discounted.tax_amount === 90, 'Tax = 10% of the discounted taxed line (900), i.e. 90 — not 100');
+assert(discounted.total_amount === 1890, 'Total = 2,000 - 200 + 90 = 1,890');
+
+// 13b. Billed amounts are rounded to the currency's cents, so invoices can be settled exactly (regression)
+console.log('\n13b. Verifying Amounts Round To Currency Precision');
+const vat15 = TaxService.createTaxRate(companyId, { name: 'Test VAT 15%', code: 'TVAT15', percentage: 15, description: 'test' });
+const odd = InvoiceService.createInvoice({
+  company_id: companyId, client_id: client.id, issue_date: today, due_date: in30, currency: 'USD', exchange_rate: 15.2,
+  discount_type: 'fixed', discount_value: 333.33,
+  items: [
+    { description: 'A', quantity: 1, unit_price: 123.45, tax_rate_id: vat15.id },
+    { description: 'B', quantity: 1, unit_price: 678.9, tax_rate_id: vat15.id },
+    { description: 'C', quantity: 1.5, unit_price: 10.01, tax_rate_id: vat15.id }
+  ]
+});
+console.log(`Total ${odd.total_amount}, tax ${odd.tax_amount}, discount ${odd.discount_amount}`);
+assert(SafeMoney.roundToPrecision(odd.total_amount, 2) === odd.total_amount, `Invoice total has no sub-cent remainder (${odd.total_amount})`);
+assert(odd.items.every((i: any) => SafeMoney.roundToPrecision(i.tax_amount, 2) === i.tax_amount), 'Every line tax is whole cents');
+PaymentService.recordPayment({ company_id: companyId, client_id: client.id, invoice_id: odd.id, amount: odd.total_amount, currency: 'USD', payment_date: today, payment_method: 'Bank Transfer' });
+const oddPaid = InvoiceService.getInvoiceById(companyId, odd.id);
+assert(oddPaid.status === 'Paid' && oddPaid.balance_due === 0, 'Paying the displayed total settles the invoice exactly');
+
+// 14. Invalid input is rejected (regression)
+console.log('\n14. Verifying Invoice & Payment Input Validation');
+const rejects = (label: string, fn: () => unknown) => {
+  let threw = false;
+  try { fn(); } catch { threw = true; }
+  assert(threw, `Rejected: ${label}`);
+};
+const baseDto = { company_id: companyId, client_id: client.id, issue_date: today, due_date: in30, currency: 'USD' };
+const oneItem = [{ description: 'Item', quantity: 1, unit_price: 100 }];
+rejects('invoice with no line items', () => InvoiceService.createInvoice({ ...baseDto, items: [] }));
+rejects('quantity of 0 (previously silently became 1)', () => InvoiceService.createInvoice({ ...baseDto, items: [{ description: 'x', quantity: 0, unit_price: 100 }] }));
+rejects('negative unit price', () => InvoiceService.createInvoice({ ...baseDto, items: [{ description: 'x', quantity: 1, unit_price: -100 }] }));
+rejects('blank line description', () => InvoiceService.createInvoice({ ...baseDto, items: [{ description: ' ', quantity: 1, unit_price: 100 }] }));
+rejects('discount over 100%', () => InvoiceService.createInvoice({ ...baseDto, items: oneItem, discount_type: 'percent', discount_value: 150 }));
+rejects('impossible issue date', () => InvoiceService.createInvoice({ ...baseDto, issue_date: '2026-02-30', items: oneItem }));
+rejects('due date before issue date', () => InvoiceService.createInvoice({ ...baseDto, due_date: daysAgo(10), items: oneItem }));
+rejects('currency not configured for the company', () => InvoiceService.createInvoice({ ...baseDto, currency: 'XYZ', items: oneItem }));
+rejects('zero exchange rate', () => InvoiceService.createInvoice({ ...baseDto, exchange_rate: 0 as any, items: oneItem }));
+rejects('negative exchange rate', () => InvoiceService.createInvoice({ ...baseDto, exchange_rate: -2, items: oneItem }));
+rejects('unknown payment method', () => PaymentService.recordPayment({ company_id: companyId, client_id: client.id, amount: 10, currency: 'USD', payment_date: today, payment_method: 'Bitcoin' as any }));
+rejects('invalid payment date', () => PaymentService.recordPayment({ company_id: companyId, client_id: client.id, amount: 10, currency: 'USD', payment_date: 'yesterday', payment_method: 'Cash' }));
+
+// 15. Overdue takes precedence over Partially Paid, and the sweep flips past-due invoices (regression)
+console.log('\n15. Verifying Overdue Status Rules & Sweep');
+assert(InvoiceService.calculateStatus(1000, 400, daysAgo(5)) === 'Overdue', 'Partly paid + past due = Overdue');
+assert(InvoiceService.calculateStatus(1000, 400, in30) === 'Partially Paid', 'Partly paid + not yet due = Partially Paid');
+assert(InvoiceService.calculateStatus(1000, 1000, daysAgo(5)) === 'Paid', 'Fully paid + past due = Paid');
+
+const aging = InvoiceService.createInvoice({ ...baseDto, items: oneItem });
+assert(aging.status === 'Unpaid', 'New invoice starts Unpaid');
+execute(`UPDATE invoices SET issue_date = ?, due_date = ? WHERE id = ?`, [daysAgo(40), daysAgo(10), aging.id]);
+const flipped = InvoiceService.refreshOverdueStatuses(companyId);
+const agingAfter = InvoiceService.getInvoiceById(companyId, aging.id);
+assert(flipped >= 1 && agingAfter.status === 'Overdue', `Sweep marked the past-due invoice Overdue (${flipped} flipped)`);
+const overdueNote = queryOne(`SELECT 1 FROM notifications WHERE company_id = ? AND type = 'invoice_overdue' AND link = ?`, [companyId, `/invoices/${aging.id}`]);
+assert(Boolean(overdueNote), 'Sweep created an invoice_overdue notification');
+assert(InvoiceService.refreshOverdueStatuses(companyId) === 0 || InvoiceService.getInvoiceById(companyId, aging.id).status === 'Overdue', 'Sweep is idempotent');
 
 console.log('\n>>> CRITICAL TEST SCENARIO 39 PASSED COMPLETELY AND FLAWLESSLY! <<<');

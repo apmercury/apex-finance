@@ -2437,6 +2437,7 @@ function addInvoiceLineItem(desc = '', qty = 1, price = 0, taxId = '') {
   `;
 
   container.appendChild(div);
+  if (taxId) div.querySelector('.item-tax').value = taxId;
 
   div.querySelectorAll('input, select').forEach(el => el.addEventListener('input', recalculateInvoiceSummary));
   div.querySelector('.btn-remove-item').addEventListener('click', () => {
@@ -2454,36 +2455,47 @@ function recalculateInvoiceSummary() {
   const exchangeRate = parseFloat(document.getElementById('inv-rate')?.value) || 1.0;
   const rows = document.querySelectorAll('.invoice-line-row');
 
-  let subtotal = 0;
-  let totalTax = 0;
-
-  rows.forEach(row => {
+  // Mirrors InvoiceService.computeInvoiceTotals: amounts are rounded to the currency's
+  // precision, the invoice discount is spread across lines in proportion to their value
+  // (last line takes the rounding remainder), and tax is charged on the discounted amount.
+  const precision = state.currencies.find(c => c.code === currencyCode)?.decimal_precision ?? 2;
+  const round = v => {
+    const f = Math.pow(10, precision);
+    return Math.sign(v) * Math.round((Math.abs(v) + Number.EPSILON) * f) / f;
+  };
+  const lines = Array.from(rows).map(row => {
     const qty = parseFloat(row.querySelector('.item-qty').value) || 0;
     const price = parseFloat(row.querySelector('.item-price').value) || 0;
     const taxSelect = row.querySelector('.item-tax');
     const taxPct = taxSelect.selectedIndex > 0 ? parseFloat(taxSelect.options[taxSelect.selectedIndex].dataset.pct) || 0 : 0;
-
-    const lineRaw = qty * price;
-    const lineTax = (lineRaw * taxPct) / 100;
-    const lineTotal = lineRaw + lineTax;
-
-    row.querySelector('.item-line-total').value = formatMoney(lineTotal, currencyCode);
-
-    subtotal += lineRaw;
-    totalTax += lineTax;
+    return { row, raw: round(qty * price), taxPct };
   });
+  const subtotal = round(lines.reduce((sum, l) => sum + l.raw, 0));
 
   const discType = document.getElementById('inv-discount-type').value;
   const discVal = parseFloat(document.getElementById('inv-discount-val').value) || 0;
   let discountAmount = 0;
 
   if (discType === 'percent' && discVal > 0) {
-    discountAmount = (subtotal * discVal) / 100;
+    discountAmount = round((subtotal * Math.min(discVal, 100)) / 100);
   } else if (discType === 'fixed' && discVal > 0) {
-    discountAmount = Math.min(discVal, subtotal);
+    discountAmount = round(Math.min(discVal, subtotal));
   }
 
-  const grandTotal = Math.max(0, subtotal - discountAmount + totalTax);
+  let totalTax = 0;
+  let allocated = 0;
+  lines.forEach((l, i) => {
+    let discountShare = 0;
+    if (discountAmount > 0 && subtotal > 0) {
+      discountShare = i === lines.length - 1 ? round(discountAmount - allocated) : round((l.raw / subtotal) * discountAmount);
+      allocated = round(allocated + discountShare);
+    }
+    const lineTax = round(((l.raw - discountShare) * l.taxPct) / 100);
+    totalTax = round(totalTax + lineTax);
+    l.row.querySelector('.item-line-total').value = formatMoney(l.raw + lineTax, currencyCode);
+  });
+
+  const grandTotal = Math.max(0, round(subtotal - discountAmount + totalTax));
   const baseTotal = grandTotal * exchangeRate;
 
   document.getElementById('summary-subtotal').innerText = formatMoney(subtotal, currencyCode);
