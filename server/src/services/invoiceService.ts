@@ -175,7 +175,8 @@ export class InvoiceService {
         dto.exchange_rate
       );
 
-      const status = dto.status || this.calculateStatus(computed.total_amount, 0, dto.due_date);
+      // A new invoice can only start as Draft or with its status derived from (zero) payments
+      const status = dto.status === 'Draft' ? 'Draft' : this.calculateStatus(computed.total_amount, 0, dto.due_date);
 
       // Insert Invoice
       execute(
@@ -368,9 +369,27 @@ export class InvoiceService {
     };
   }
 
-  public static updateInvoiceStatus(companyId: string, id: string, status: string, userId?: string, userName?: string): any {
+  /**
+   * Statuses a user may set by hand. Paid / Partially Paid / Overdue are always derived
+   * from recorded payments and the due date, never set directly.
+   * 'Unpaid' means "reopen": the status is recalculated from the invoice's payments.
+   */
+  public static readonly MANUAL_STATUSES = ['Draft', 'Cancelled', 'Unpaid'] as const;
+
+  public static updateInvoiceStatus(companyId: string, id: string, requestedStatus: string, userId?: string, userName?: string): any {
     const existing = this.getInvoiceById(companyId, id);
     if (!existing) return null;
+
+    if (!(this.MANUAL_STATUSES as readonly string[]).includes(requestedStatus)) {
+      throw new Error(`Invalid status "${requestedStatus}". Allowed: ${this.MANUAL_STATUSES.join(', ')}. Paid and Partially Paid are set by recording payments.`);
+    }
+    if ((requestedStatus === 'Draft' || requestedStatus === 'Cancelled') && Number(existing.amount_paid) > 0) {
+      throw new Error(`Cannot mark an invoice with recorded payments as ${requestedStatus}. Reverse the payments first.`);
+    }
+
+    const status = requestedStatus === 'Unpaid'
+      ? this.calculateStatus(existing.total_amount, existing.amount_paid, existing.due_date)
+      : requestedStatus;
 
     execute(`UPDATE invoices SET status = ?, updated_at = datetime('now') WHERE id = ? AND company_id = ?`, [status, id, companyId]);
 

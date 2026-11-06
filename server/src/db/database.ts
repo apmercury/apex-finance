@@ -376,10 +376,6 @@ export function initDatabase() {
       is_system INTEGER DEFAULT 0,
       created_at TEXT DEFAULT CURRENT_TIMESTAMP
     );
-
-    -- Ensure default user placeholder exists for default unauthenticated API operations
-    INSERT OR IGNORE INTO users (id, email, password_hash, salt, full_name, is_superadmin, status)
-    VALUES ('u_admin_default', 'admin@apexfin.com', 'seeded', 'seeded', 'Alexander Vance (Admin)', 1, 'active');
   `);
 
   // Safe schema migrations for existing SQLite databases

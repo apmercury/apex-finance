@@ -2,13 +2,29 @@ import { server } from '../server/src/index.ts';
 import { execFileSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import * as os from 'node:os';
 
-const PORT = 3000;
+const PORT = parseInt(process.env.PORT || '3000', 10);
 const BASE_URL = `http://127.0.0.1:${PORT}`;
+
+let authToken = '';
+
+async function login(email: string, password: string): Promise<string> {
+  const res = await fetch(`${BASE_URL}/api/auth/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, password })
+  });
+  if (res.status !== 200) throw new Error(`Login failed for ${email}: HTTP ${res.status}`);
+  const data = await res.json();
+  return data.token;
+}
 
 async function testEndpoint(name: string, urlPath: string, expectedStatus: number = 200) {
   try {
-    const res = await fetch(`${BASE_URL}${urlPath}`);
+    const res = await fetch(`${BASE_URL}${urlPath}`, {
+      headers: authToken ? { Authorization: `Bearer ${authToken}` } : {}
+    });
     if (res.status !== expectedStatus) {
       throw new Error(`Expected status ${expectedStatus} but got ${res.status}`);
     }
@@ -46,6 +62,9 @@ async function runSuite() {
   await testEndpoint('Frontend JS', '/app.js');
 
   // 2. Auth & Company
+  await testEndpoint('Unauthenticated API request is rejected', '/api/auth/me', 401);
+  authToken = await login('admin@apexfin.com', 'admin123');
+  console.log('PASS: Logged in as demo administrator');
   await testEndpoint('Auth Profile', '/api/auth/me');
   await testEndpoint('Company Profile', '/api/company');
 
@@ -111,7 +130,7 @@ async function runSuite() {
         '--no-sandbox',
         '--disable-gpu',
         '--window-size=1440,900',
-        `--user-data-dir=/tmp/chrome_test_profile_${Date.now()}`,
+        `--user-data-dir=${path.join(os.tmpdir(), `chrome_test_profile_${Date.now()}`)}`,
         `--screenshot=${shotPath}`,
         BASE_URL
       ], { timeout: 8000 });

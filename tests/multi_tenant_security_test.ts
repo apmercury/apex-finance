@@ -1,8 +1,9 @@
 import { server } from '../server/src/index.ts';
 import { queryOne, execute } from '../server/src/db/database.ts';
 import { createToken } from '../server/src/utils/security.ts';
+import * as crypto from 'node:crypto';
 
-const PORT = 3000;
+const PORT = parseInt(process.env.PORT || '3000', 10);
 const BASE_URL = `http://127.0.0.1:${PORT}`;
 
 function assert(condition: boolean, msg: string) {
@@ -76,6 +77,30 @@ async function runTests() {
     companyName: comp2.name,
     isSuperAdmin: false
   });
+
+  // -------------------------------------------------------------------------
+  // TEST 0: Unauthenticated & forged requests are rejected (regression)
+  // -------------------------------------------------------------------------
+  console.log('\n--- TEST 0: Authentication Required ---');
+  const noToken = await request(`/api/auth/me`);
+  assert(noToken.status === 401, `Request without a token is REJECTED with 401 (Status: ${noToken.status})`);
+
+  const garbageToken = await request(`/api/platform/companies`, { headers: { Authorization: 'Bearer garbage' } });
+  assert(garbageToken.status === 401, `Request with an invalid token is REJECTED with 401 (Status: ${garbageToken.status})`);
+
+  const noTokenSse = await fetch(`${BASE_URL}/api/events`);
+  assert(noTokenSse.status === 401, `Event stream without a token is REJECTED with 401 (Status: ${noTokenSse.status})`);
+
+  // A token signed with the secret that used to be hard-coded in the source must not verify
+  const legacySecret = 'apex-finance-enterprise-secret-key-2026-safe-production';
+  const b64 = (o: any) => Buffer.from(JSON.stringify(o)).toString('base64url');
+  const forgedData = `${b64({ alg: 'HS256', typ: 'JWT' })}.${b64({
+    userId: adminUser.id, email: adminUser.email, fullName: 'Forged', role: 'Platform Admin',
+    companyId: comp1.id, companyName: comp1.name, isSuperAdmin: true, exp: Math.floor(Date.now() / 1000) + 3600
+  })}`;
+  const forgedSig = crypto.createHmac('sha256', legacySecret).update(forgedData).digest('base64url');
+  const forged = await request(`/api/platform/companies`, { headers: { Authorization: `Bearer ${forgedData}.${forgedSig}` } });
+  assert(forged.status === 401, `Token forged with the legacy default secret is REJECTED with 401 (Status: ${forged.status})`);
 
   // -------------------------------------------------------------------------
   // TEST 1: Tenant Data Isolation on Invoices
@@ -189,6 +214,78 @@ async function runTests() {
     headers: { Authorization: `Bearer ${tokenStaffComp1}` }
   });
   assert(rbacDeleteClient.status === 403, `Staff member deleting a client is REJECTED with 403 (Status: ${rbacDeleteClient.status})`);
+
+  // -------------------------------------------------------------------------
+  // TEST 6b: Invoice status cannot be forced (regression)
+  // -------------------------------------------------------------------------
+  console.log('\n--- TEST 6b: Invoice Status Integrity ---');
+  const unpaidInv = queryOne(
+    `SELECT * FROM invoices WHERE company_id = ? AND balance_due > 0 AND status NOT IN ('Cancelled', 'Draft') LIMIT 1`,
+    [comp1.id]
+  );
+  assert(Boolean(unpaidInv), 'Company 1 has an invoice with an outstanding balance');
+
+  const staffForcePaid = await request(`/api/invoices/${unpaidInv.id}/status`, {
+    method: 'PUT',
+    headers: { Authorization: `Bearer ${tokenStaffComp1}` },
+    body: JSON.stringify({ status: 'Paid' })
+  });
+  assert(staffForcePaid.status === 403, `Staff member changing invoice status is REJECTED with 403 (Status: ${staffForcePaid.status})`);
+
+  const adminForcePaid = await request(`/api/invoices/${unpaidInv.id}/status`, {
+    method: 'PUT',
+    headers: { Authorization: `Bearer ${tokenAdminComp1}` },
+    body: JSON.stringify({ status: 'Paid' })
+  });
+  assert(adminForcePaid.status === 400, `Marking an invoice Paid without payments is REJECTED with 400 (Status: ${adminForcePaid.status})`);
+
+  const adminBogusStatus = await request(`/api/invoices/${unpaidInv.id}/status`, {
+    method: 'PUT',
+    headers: { Authorization: `Bearer ${tokenAdminComp1}` },
+    body: JSON.stringify({ status: '<b>whatever</b>' })
+  });
+  assert(adminBogusStatus.status === 400, `Arbitrary status strings are REJECTED with 400 (Status: ${adminBogusStatus.status})`);
+  const statusAfter = queryOne(`SELECT status FROM invoices WHERE id = ?`, [unpaidInv.id]);
+  assert(statusAfter.status === unpaidInv.status, `Invoice status unchanged after rejected attempts (${statusAfter.status})`);
+
+  // -------------------------------------------------------------------------
+  // TEST 6c: Stored data is HTML-escaped in rendered receipts (regression)
+  // -------------------------------------------------------------------------
+  console.log('\n--- TEST 6c: Stored XSS in Receipt Rendering ---');
+  const xssPayload = '<img src=x onerror=alert(1)>';
+  const xssClient = await request(`/api/clients`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${tokenAdminComp1}` },
+    body: JSON.stringify({ company_name: xssPayload, preferred_currency: 'GHS', email: 'xss@example.com' })
+  });
+  assert(xssClient.status === 201, 'Client with HTML in its name can be stored');
+  const xssPayment = await request(`/api/payments`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${tokenAdminComp1}` },
+    body: JSON.stringify({
+      client_id: xssClient.data.id,
+      amount: 10,
+      currency: 'GHS',
+      payment_date: new Date().toISOString().slice(0, 10),
+      payment_method: 'Cash',
+      notes: '<script>alert(2)</script>'
+    })
+  });
+  assert(xssPayment.status === 201, 'Payment for that client recorded');
+  const receiptHtml = await request(`/api/payments/${xssPayment.data.id}/receipt/html`, {
+    headers: { Authorization: `Bearer ${tokenAdminComp1}` }
+  });
+  assert(receiptHtml.status === 200, 'Receipt HTML rendered');
+  assert(!String(receiptHtml.data).includes(xssPayload), 'Raw <img onerror> payload is NOT present in receipt HTML');
+  assert(!String(receiptHtml.data).includes('<script>alert(2)'), 'Raw <script> payload is NOT present in receipt HTML');
+  assert(String(receiptHtml.data).includes('&lt;img src=x onerror=alert(1)&gt;'), 'Payload is rendered as escaped text');
+
+  // Clean up the test data (reverse payment first so ledgers stay consistent)
+  await request(`/api/payments/${xssPayment.data.id}/reverse`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${tokenAdminComp1}` },
+    body: JSON.stringify({ reason: 'Security test cleanup' })
+  });
 
   // -------------------------------------------------------------------------
   // TEST 7: Company Onboarding Flow & Creator Admin Role

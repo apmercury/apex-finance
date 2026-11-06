@@ -1,9 +1,14 @@
+import './env.ts';
 import * as http from 'node:http';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as url from 'node:url';
 import { handleApiRequest } from './routes/api.ts';
 import { seedDemoData } from './db/seed.ts';
+import { getJwtSecret } from './utils/security.ts';
+
+// Fail fast on missing production secrets instead of at the first login
+getJwtSecret();
 
 const PORT = parseInt(process.env.PORT || '3000', 10);
 const HOST = process.env.HOST || '127.0.0.1';
@@ -79,10 +84,11 @@ const server = http.createServer(async (req, res) => {
 
 server.on('error', (e: any) => {
   if (e.code === 'EADDRINUSE') {
-    // Port is already occupied (e.g. tests running against active daemon instance)
-  } else {
-    console.error('Server error:', e);
+    // Fail loudly: silently continuing makes tests hit whatever other process owns the port
+    console.error(`Port ${PORT} is already in use. Stop the other process or set PORT to a free port.`);
+    process.exit(1);
   }
+  console.error('Server error:', e);
 });
 
 server.listen(PORT, HOST, () => {

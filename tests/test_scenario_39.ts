@@ -158,4 +158,29 @@ const dash = DashboardService.getDashboardMetrics(companyId);
 assert(dash.summary.totalRevenue.value > 0, 'Dashboard total revenue is populated');
 console.log('Dashboard Total Revenue:', dash.summary.totalRevenue.value);
 
+// 11. Payment reversal must remove the revenue from P&L (regression)
+console.log('\n11. Verifying Payment Reversal Updates P&L');
+const pnlBefore = ReportService.getProfitAndLoss(companyId);
+const finalPayment = invAfterP3.payments.find((p: any) => p.amount === 4000);
+assert(Boolean(finalPayment), 'Found the USD 4,000 final payment');
+PaymentService.reversePayment(companyId, finalPayment.id, 'Bounced transfer (test)');
+const pnlAfter = ReportService.getProfitAndLoss(companyId);
+const expectedDrop = SafeMoney.convertCurrency(4000, invAfterP3.exchange_rate);
+const actualDrop = SafeMoney.subtract(pnlBefore.totalRevenue, pnlAfter.totalRevenue);
+console.log(`P&L revenue before: ${pnlBefore.totalRevenue}, after: ${pnlAfter.totalRevenue}, drop: ${actualDrop}`);
+assert(SafeMoney.compare(actualDrop, expectedDrop) === 0, `P&L revenue dropped by the reversed amount (${expectedDrop})`);
+const invAfterReversal = InvoiceService.getInvoiceById(companyId, invoice.id);
+assert(invAfterReversal.balance_due === 4000, 'Invoice balance restored to USD 4,000 after reversal');
+assert(invAfterReversal.status === 'Partially Paid', 'Invoice back to Partially Paid after reversal');
+
+// 12. Paid cannot be forced through the manual status path (regression)
+console.log('\n12. Verifying Manual Status Guard');
+let forcedPaidRejected = false;
+try {
+  InvoiceService.updateInvoiceStatus(companyId, invoice.id, 'Paid');
+} catch {
+  forcedPaidRejected = true;
+}
+assert(forcedPaidRejected, 'Setting status to Paid manually is rejected');
+
 console.log('\n>>> CRITICAL TEST SCENARIO 39 PASSED COMPLETELY AND FLAWLESSLY! <<<');

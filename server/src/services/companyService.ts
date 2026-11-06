@@ -5,6 +5,7 @@ import { TaxService } from './taxService.ts';
 import { TemplateService } from './templateService.ts';
 import { PaymentNoteService } from './paymentNoteService.ts';
 import { AuditService } from './auditService.ts';
+import { RevenueService } from './revenueService.ts';
 import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -455,7 +456,8 @@ export class CompanyService {
         (SELECT COUNT(*) FROM company_users cu WHERE cu.company_id = c.id AND cu.is_active = 1) as member_count,
         (SELECT COUNT(*) FROM clients cl WHERE cl.company_id = c.id) as client_count,
         (SELECT COUNT(*) FROM invoices inv WHERE inv.company_id = c.id) as invoice_count,
-        (SELECT COALESCE(SUM(base_currency_amount), 0) FROM revenues rev WHERE rev.company_id = c.id) as total_revenue_base
+        (SELECT COALESCE(SUM(base_currency_amount), 0) FROM revenues
+           WHERE revenues.company_id = c.id AND ${RevenueService.NOT_REVERSED_SQL}) as total_revenue_base
       FROM companies c
       ORDER BY c.created_at DESC
     `;

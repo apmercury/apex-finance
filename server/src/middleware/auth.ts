@@ -116,24 +116,8 @@ export function getAuthContext(req: IncomingMessage): AuthContext | null {
     };
   }
 
-  // Fallback for seamless dev/demo mode and backward-compatible test suites
-  // Locks strictly to default admin of comp_apex_01 without trusting any user-supplied companyId
-  const fallbackUser = queryOne(`SELECT * FROM users WHERE email = 'admin@apexfin.com'`) || queryOne(`SELECT * FROM users LIMIT 1`);
-  if (!fallbackUser) return null;
-
-  const defaultComp = queryOne(`SELECT id, name FROM companies WHERE id = 'comp_apex_01'`) || queryOne(`SELECT id, name FROM companies LIMIT 1`);
-  if (!defaultComp) return null;
-
-  return {
-    userId: fallbackUser.id,
-    email: fallbackUser.email,
-    fullName: fallbackUser.full_name,
-    isSuperAdmin: Boolean(fallbackUser.is_superadmin),
-    companyId: defaultComp.id,
-    companyName: defaultComp.name,
-    role: 'Administrator',
-    permissions: ['*']
-  };
+  // No valid token: the request is unauthenticated. Never fall back to a default identity.
+  return null;
 }
 
 /**

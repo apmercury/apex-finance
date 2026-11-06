@@ -1,6 +1,7 @@
 import { IncomingMessage, ServerResponse } from 'node:http';
 import * as url from 'node:url';
 import * as fs from 'node:fs';
+import * as crypto from 'node:crypto';
 import { verifyPassword, createToken } from '../utils/security.ts';
 import { queryOne, execute } from '../db/database.ts';
 import { getAuthContext, hasRole, hasPermission } from '../middleware/auth.ts';
@@ -76,9 +77,11 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
   // --- REAL-TIME SSE BROADCAST ENDPOINT ---
   if (pathname === '/api/events') {
     const auth = getAuthContext(req);
-    const companyId = auth?.companyId || 'comp_apex_01';
-    const clientId = Math.random().toString(36).substring(7);
-    sseService.registerClient(clientId, companyId, auth?.userId, res);
+    if (!auth) {
+      sendJson(res, 401, { error: 'Authentication required' });
+      return true;
+    }
+    sseService.registerClient(crypto.randomUUID(), auth.companyId, auth.userId, res);
     return true;
   }
 
@@ -671,10 +674,22 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
   }
 
   if (pathname.match(/^\/api\/invoices\/([A-Za-z0-9_-]+)\/status$/) && method === 'PUT') {
+    if (!hasRole(auth, ['Administrator', 'Finance Manager'])) {
+      sendJson(res, 403, { error: 'Only Administrators or Finance Managers can change invoice status' });
+      return true;
+    }
     const id = pathname.split('/')[3];
-    const body = await parseBody(req);
-    const updated = InvoiceService.updateInvoiceStatus(companyId, id, body.status, auth.userId, auth.fullName);
-    sendJson(res, 200, updated);
+    try {
+      const body = await parseBody(req);
+      const updated = InvoiceService.updateInvoiceStatus(companyId, id, body.status, auth.userId, auth.fullName);
+      if (!updated) {
+        sendJson(res, 404, { error: 'Invoice not found' });
+        return true;
+      }
+      sendJson(res, 200, updated);
+    } catch (e: any) {
+      sendJson(res, 400, { error: e.message });
+    }
     return true;
   }
 
@@ -829,7 +844,9 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
         const html = PdfService.renderReceiptHtml(targetCompanyId, id);
         res.writeHead(200, {
           'Content-Type': 'text/html; charset=utf-8',
-          'Content-Security-Policy': "default-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://fonts.gstatic.com;"
+          // No scripts at all: receipt markup is static, and this page is served from the app origin
+          'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src data: https:; base-uri 'none'; form-action 'none'; frame-ancestors 'self'",
+          'X-Content-Type-Options': 'nosniff'
         });
         res.end(html);
         return true;

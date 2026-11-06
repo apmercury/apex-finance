@@ -3,6 +3,13 @@ import { SafeMoney } from '../utils/financialMath.ts';
 
 export class RevenueService {
   /**
+   * SQL predicate (for an unaliased `revenues` row) excluding revenue whose source payment was reversed.
+   * Payment reversal leaves the revenue row in place for history; every revenue query must apply this.
+   */
+  public static readonly NOT_REVERSED_SQL =
+    `NOT EXISTS (SELECT 1 FROM payments rp WHERE rp.id = revenues.payment_id AND rp.status = 'Reversed')`;
+
+  /**
    * Get Revenue breakdown: Invoiced vs Collected vs Outstanding
    */
   public static getRevenueBreakdown(companyId: string, filters: { startDate?: string; endDate?: string; currency?: string } = {}): any {
@@ -86,7 +93,8 @@ export class RevenueService {
        FROM revenues r
        LEFT JOIN clients c ON r.client_id = c.id
        LEFT JOIN invoices i ON r.invoice_id = i.id
-       WHERE r.company_id = ?
+       LEFT JOIN payments p ON r.payment_id = p.id
+       WHERE r.company_id = ? AND (p.id IS NULL OR p.status != 'Reversed')
        ORDER BY r.revenue_date DESC, r.created_at DESC LIMIT ?`,
       [companyId, limit]
     );
