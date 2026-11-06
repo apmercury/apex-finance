@@ -1,4 +1,4 @@
-import { execute, queryAll, queryOne, sanitizeFk } from '../db/database.ts';
+import { execute, queryAll, queryOne, sanitizeFk, sanitizeTenantFk } from '../db/database.ts';
 import { SafeMoney } from '../utils/financialMath.ts';
 import { CurrencyService } from './currencyService.ts';
 import { AuditService } from './auditService.ts';
@@ -84,7 +84,7 @@ export class ExpenseService {
       [
         id,
         dto.company_id,
-        sanitizeFk('expense_categories', categoryId),
+        sanitizeTenantFk('expense_categories', categoryId, dto.company_id),
         dto.vendor,
         dto.description,
         amount,

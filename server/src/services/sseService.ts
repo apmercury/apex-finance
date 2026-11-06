@@ -14,8 +14,7 @@ class SSEService {
     res.writeHead(200, {
       'Content-Type': 'text/event-stream',
       'Cache-Control': 'no-cache',
-      'Connection': 'keep-alive',
-      'Access-Control-Allow-Origin': '*'
+      'Connection': 'keep-alive'
     });
     res.write(`data: ${JSON.stringify({ event: 'connected', clientId: id })}\n\n`);
 

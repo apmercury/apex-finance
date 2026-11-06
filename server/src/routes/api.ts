@@ -23,6 +23,8 @@ import { AuditService } from '../services/auditService.ts';
 import { SearchService } from '../services/searchService.ts';
 import { sseService } from '../services/sseService.ts';
 import { EmailService } from '../services/emailService.ts';
+import { FailureLimiter } from '../utils/rateLimit.ts';
+import { hashPassword } from '../utils/security.ts';
 
 // Helper to read JSON body
 function parseBody(req: IncomingMessage): Promise<any> {
@@ -46,15 +48,54 @@ function parseBody(req: IncomingMessage): Promise<any> {
   });
 }
 
+// The SPA is served from the same origin, so cross-origin access is off unless
+// CORS_ORIGIN explicitly names a trusted origin (e.g. a separately hosted frontend).
+function corsHeaders(): Record<string, string> {
+  const origin = process.env.CORS_ORIGIN;
+  if (!origin) return {};
+  return {
+    'Access-Control-Allow-Origin': origin,
+    'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+    'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
+    'Vary': 'Origin'
+  };
+}
+
 // JSON response helper
 function sendJson(res: ServerResponse, statusCode: number, data: any) {
   res.writeHead(statusCode, {
     'Content-Type': 'application/json',
-    'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Headers': 'Content-Type, Authorization',
-    'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS'
+    'Cache-Control': 'no-store',
+    'X-Content-Type-Options': 'nosniff',
+    ...corsHeaders()
   });
   res.end(JSON.stringify(data));
+}
+
+// Unexpected failures: log the detail server-side, never send internals to the client
+function sendServerError(res: ServerResponse, error: unknown, publicMessage = 'Internal server error') {
+  console.error('[API] Unhandled error:', error);
+  sendJson(res, 500, { error: publicMessage });
+}
+
+// Brute-force protection: 5 failures per account+IP, 30 per IP, per 15 minutes
+const loginFailuresByAccount = new FailureLimiter(5, 15 * 60 * 1000);
+const loginFailuresByIp = new FailureLimiter(30, 15 * 60 * 1000);
+
+function clientIp(req: IncomingMessage): string {
+  // Only trust X-Forwarded-For when running behind a known reverse proxy
+  if (process.env.TRUST_PROXY === 'true') {
+    const fwd = req.headers['x-forwarded-for'];
+    if (typeof fwd === 'string' && fwd) return fwd.split(',')[0].trim();
+  }
+  return req.socket.remoteAddress || 'unknown';
+}
+
+function appBaseUrl(req: IncomingMessage): string {
+  // Prefer the configured URL: the Host header is attacker-controlled and would end up in emailed links
+  if (process.env.APP_URL) return process.env.APP_URL.replace(/\/$/, '');
+  const host = req.headers['host'] || 'localhost:3000';
+  return `${host.startsWith('localhost') || host.startsWith('127.0.0.1') ? 'http' : 'https'}://${host}`;
 }
 
 export async function handleApiRequest(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
@@ -65,11 +106,7 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 
   // Handle CORS Preflight
   if (method === 'OPTIONS') {
-    res.writeHead(204, {
-      'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Headers': 'Content-Type, Authorization',
-      'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS'
-    });
+    res.writeHead(204, corsHeaders());
     res.end();
     return true;
   }
@@ -95,11 +132,24 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
         return true;
       }
 
-      const user = queryOne(`SELECT * FROM users WHERE email = ?`, [email.toLowerCase().trim()]);
-      if (!user || !verifyPassword(password, user.salt, user.password_hash)) {
+      const normalizedEmail = String(email).toLowerCase().trim();
+      const ip = clientIp(req);
+      const accountKey = `${ip}|${normalizedEmail}`;
+      const retryAfter = Math.max(loginFailuresByAccount.retryAfter(accountKey), loginFailuresByIp.retryAfter(ip));
+      if (retryAfter > 0) {
+        res.setHeader('Retry-After', String(retryAfter));
+        sendJson(res, 429, { error: `Too many failed login attempts. Try again in ${Math.ceil(retryAfter / 60)} minute(s).` });
+        return true;
+      }
+
+      const user = queryOne(`SELECT * FROM users WHERE email = ?`, [normalizedEmail]);
+      if (!user || !verifyPassword(String(password), user.salt, user.password_hash)) {
+        loginFailuresByAccount.recordFailure(accountKey);
+        loginFailuresByIp.recordFailure(ip);
         sendJson(res, 401, { error: 'Invalid email or password' });
         return true;
       }
+      loginFailuresByAccount.reset(accountKey);
 
       if (user.status !== 'active') {
         sendJson(res, 403, { error: 'Account is deactivated or suspended' });
@@ -136,14 +186,15 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
           role: roleName,
           companyId,
           companyName,
-          isSuperAdmin
+          isSuperAdmin,
+          mustChangePassword: Boolean(user.must_change_password)
         },
         company: companyRecord,
         myCompanies
       });
       return true;
     } catch (e: any) {
-      sendJson(res, 500, { error: e.message });
+      sendServerError(res, e);
       return true;
     }
   }
@@ -160,6 +211,15 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
   // Verified tenant company_id from authenticated context (never from user-supplied query/param)
   const companyId = auth.companyId;
 
+  // Accounts created with a temporary password may only change it (or read their profile) until they do
+  const mustChangePassword = Boolean(
+    queryOne<{ must_change_password: number }>(`SELECT must_change_password FROM users WHERE id = ?`, [auth.userId])?.must_change_password
+  );
+  if (mustChangePassword && pathname !== '/api/auth/me' && pathname !== '/api/auth/change-password') {
+    sendJson(res, 403, { error: 'You must change your temporary password before continuing.', code: 'PASSWORD_CHANGE_REQUIRED' });
+    return true;
+  }
+
   // Current authenticated user & tenant context
   if (pathname === '/api/auth/me' && method === 'GET') {
     const comp = queryOne(`SELECT * FROM companies WHERE id = ?`, [companyId]);
@@ -173,11 +233,52 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
         companyId: auth.companyId,
         companyName: auth.companyName,
         isSuperAdmin: auth.isSuperAdmin,
-        permissions: auth.permissions
+        permissions: auth.permissions,
+        mustChangePassword
       },
       company: comp,
       myCompanies
     });
+    return true;
+  }
+
+  // --- CHANGE OWN PASSWORD ---
+  if (pathname === '/api/auth/change-password' && method === 'POST') {
+    try {
+      const body = await parseBody(req);
+      const currentPassword = String(body.currentPassword || '');
+      const newPassword = String(body.newPassword || '');
+      const user = queryOne(`SELECT * FROM users WHERE id = ?`, [auth.userId]);
+      if (!user || !verifyPassword(currentPassword, user.salt, user.password_hash)) {
+        sendJson(res, 400, { error: 'Current password is incorrect' });
+        return true;
+      }
+      if (newPassword.length < 10) {
+        sendJson(res, 400, { error: 'New password must be at least 10 characters' });
+        return true;
+      }
+      if (newPassword === currentPassword) {
+        sendJson(res, 400, { error: 'New password must be different from the current password' });
+        return true;
+      }
+      const cred = hashPassword(newPassword);
+      execute(
+        `UPDATE users SET password_hash = ?, salt = ?, must_change_password = 0, updated_at = datetime('now') WHERE id = ?`,
+        [cred.hash, cred.salt, auth.userId]
+      );
+      AuditService.log({
+        companyId,
+        userId: auth.userId,
+        userName: auth.fullName,
+        userRole: auth.role,
+        action: 'PASSWORD_CHANGED',
+        entityType: 'USER',
+        entityId: auth.userId
+      });
+      sendJson(res, 200, { success: true });
+    } catch (e: any) {
+      sendServerError(res, e);
+    }
     return true;
   }
 
@@ -239,26 +340,24 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
         sendJson(res, 400, { error: 'Email and full name are required' });
         return true;
       }
-      const member = CompanyService.inviteMember(
+      const { member, temporaryPassword } = CompanyService.inviteMember(
         companyId,
         { userId: auth.userId, userName: auth.fullName },
         body
       );
 
       const company = CompanyService.getCompanyById(companyId);
-      const host = req.headers['host'] || 'localhost:3000';
-      const protocol = (req.headers['x-forwarded-proto'] as string) || (host.startsWith('localhost') ? 'http' : 'https');
-      const appUrl = `${protocol}://${host}`;
 
-      // Dispatch automated background invitation email via Namecheap / cPanel SMTP
+      // Dispatch background invitation email. The temporary password (new accounts only)
+      // goes only to the invitee's mailbox, never into the API response.
       EmailService.sendInvitationEmail({
         toEmail: body.email.trim(),
         fullName: body.fullName.trim(),
         companyName: company?.name || 'Your Organization',
         inviterName: auth.fullName || 'Administrator',
         roleName: body.roleName || 'Staff',
-        temporaryPassword: 'welcome123',
-        appUrl
+        temporaryPassword: temporaryPassword || undefined,
+        appUrl: appBaseUrl(req)
       }).catch(err => {
         console.error('[EmailService] Background invite email error:', err);
       });
@@ -333,6 +432,14 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
     }
     const targetCompId = pathname.split('/')[4];
     const body = await parseBody(req);
+    if (body.status !== 'active' && body.status !== 'suspended') {
+      sendJson(res, 400, { error: 'status must be "active" or "suspended"' });
+      return true;
+    }
+    if (!CompanyService.getCompanyById(targetCompId)) {
+      sendJson(res, 404, { error: 'Company not found' });
+      return true;
+    }
     const updated = CompanyService.updateCompanyStatus(
       targetCompId,
       body.status,
@@ -446,7 +553,7 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
       sendJson(res, 200, updated);
       return true;
     } catch (e: any) {
-      sendJson(res, 500, { error: e.message });
+      sendServerError(res, e);
       return true;
     }
   }
@@ -481,7 +588,12 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
       return true;
     }
     const code = pathname.split('/')[3];
-    CurrencyService.setBaseCurrency(companyId, code);
+    try {
+      CurrencyService.setBaseCurrency(companyId, code);
+    } catch (e: any) {
+      sendJson(res, 400, { error: e.message });
+      return true;
+    }
     AuditService.log({
       companyId,
       userId: auth.userId,
@@ -741,7 +853,7 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
       stream.pipe(res);
       return true;
     } catch (e: any) {
-      sendJson(res, 500, { error: 'PDF generation failed: ' + e.message });
+      sendServerError(res, e, 'PDF generation failed');
       return true;
     }
   }
@@ -851,7 +963,7 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
         res.end(html);
         return true;
       } catch (e: any) {
-        sendJson(res, 500, { error: 'Receipt render failed: ' + e.message });
+        sendServerError(res, e, 'Receipt render failed');
         return true;
       }
     }
@@ -871,7 +983,7 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
       stream.pipe(res);
       return true;
     } catch (e: any) {
-      sendJson(res, 500, { error: 'Receipt generation failed: ' + e.message });
+      sendServerError(res, e, 'Receipt generation failed');
       return true;
     }
   }
@@ -1021,8 +1133,12 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
       return true;
     }
     const id = pathname.split('/')[3];
-    TemplateService.setDefault(companyId, id);
-    sendJson(res, 200, { success: true });
+    try {
+      TemplateService.setDefault(companyId, id);
+      sendJson(res, 200, { success: true });
+    } catch (e: any) {
+      sendJson(res, 404, { error: e.message });
+    }
     return true;
   }
 

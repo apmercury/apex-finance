@@ -52,6 +52,7 @@ async function api(path, options = {}) {
   }
   if (!res.ok) {
     const err = await res.json().catch(() => ({ error: res.statusText }));
+    if (err.code === 'PASSWORD_CHANGE_REQUIRED') showPasswordChangeOverlay();
     throw new Error(err.error || 'Request failed');
   }
   return res.json();
@@ -65,6 +66,44 @@ function showAuthOverlay() {
 function hideAuthOverlay() {
   const overlay = document.getElementById('auth-overlay');
   if (overlay) overlay.style.display = 'none';
+}
+
+let passwordChangeFormBound = false;
+function showPasswordChangeOverlay() {
+  const overlay = document.getElementById('password-change-overlay');
+  if (!overlay) return;
+  overlay.style.display = 'flex';
+  if (passwordChangeFormBound) return;
+  passwordChangeFormBound = true;
+
+  document.getElementById('form-password-change').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const currentPassword = document.getElementById('pwc-current').value;
+    const newPassword = document.getElementById('pwc-new').value;
+    const confirmPassword = document.getElementById('pwc-confirm').value;
+    if (newPassword !== confirmPassword) {
+      showToast('The new passwords do not match', 'error');
+      return;
+    }
+    try {
+      await api('/auth/change-password', {
+        method: 'POST',
+        body: JSON.stringify({ currentPassword, newPassword })
+      });
+      overlay.style.display = 'none';
+      e.target.reset();
+      showToast('Password updated', 'success');
+      await initApp();
+    } catch (err) {
+      showToast(err.message, 'error');
+    }
+  });
+
+  document.getElementById('pwc-logout').addEventListener('click', () => {
+    localStorage.removeItem('apex_token');
+    overlay.style.display = 'none';
+    showAuthOverlay();
+  });
 }
 
 // Toast notification helper
@@ -278,6 +317,12 @@ async function initApp() {
     state.myCompanies = authData.myCompanies || [];
 
     hideAuthOverlay();
+
+    // Temporary-password accounts must set their own password before using the app
+    if (authData.user.mustChangePassword) {
+      showPasswordChangeOverlay();
+      return;
+    }
     updateSidebarUser();
     updateCompanySwitcher();
 

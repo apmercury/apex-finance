@@ -1,4 +1,4 @@
-import { execute, queryAll, queryOne, runTransaction, sanitizeFk } from '../db/database.ts';
+import { execute, queryAll, queryOne, runTransaction, sanitizeFk, sanitizeTenantFk, requireTenantClient } from '../db/database.ts';
 import { SafeMoney } from '../utils/financialMath.ts';
 import { CurrencyService } from './currencyService.ts';
 import { ClientService } from './clientService.ts';
@@ -163,6 +163,8 @@ export class InvoiceService {
    */
   public static createInvoice(dto: CreateInvoiceDTO): any {
     return runTransaction(() => {
+      requireTenantClient(dto.company_id, dto.client_id);
+
       const invoiceId = crypto.randomUUID();
       const invoiceNumber = this.generateInvoiceNumber(dto.company_id);
 
@@ -191,7 +193,7 @@ export class InvoiceService {
           dto.company_id,
           invoiceNumber,
           dto.client_id,
-          sanitizeFk('invoice_templates', dto.template_id),
+          sanitizeTenantFk('invoice_templates', dto.template_id, dto.company_id),
           dto.issue_date,
           dto.due_date,
           dto.currency.toUpperCase(),
@@ -227,7 +229,7 @@ export class InvoiceService {
             item.quantity,
             item.unit_price,
             item.discount_percent,
-            sanitizeFk('tax_rates', item.tax_rate_id),
+            sanitizeTenantFk('tax_rates', item.tax_rate_id, dto.company_id),
             item.tax_rate_percentage,
             item.tax_amount,
             item.line_total,

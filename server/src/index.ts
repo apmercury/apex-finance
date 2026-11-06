@@ -39,6 +39,10 @@ const server = http.createServer(async (req, res) => {
     if (pathname.startsWith('/api/')) {
       const handled = await handleApiRequest(req, res);
       if (handled) return;
+      // Unknown API routes must not fall through to the SPA's index.html
+      res.writeHead(404, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'API route not found' }));
+      return;
     }
 
     // 2. Static File Serving from client/public
@@ -74,10 +78,12 @@ const server = http.createServer(async (req, res) => {
     res.writeHead(404, { 'Content-Type': 'text/plain' });
     res.end('Not Found');
   } catch (error: any) {
-    console.error('Server error:', error);
+    // Malformed request bodies are client errors; anything else is logged but not exposed
+    const status = error?.message === 'Invalid JSON' ? 400 : error?.message === 'Payload too large' ? 413 : 500;
+    if (status === 500) console.error('Server error:', error);
     if (!res.headersSent) {
-      res.writeHead(500, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: error.message }));
+      res.writeHead(status, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: status === 500 ? 'Internal server error' : error.message }));
     }
   }
 });

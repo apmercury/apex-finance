@@ -2,6 +2,7 @@ import { server } from '../server/src/index.ts';
 import { queryOne, execute } from '../server/src/db/database.ts';
 import { createToken } from '../server/src/utils/security.ts';
 import * as crypto from 'node:crypto';
+import { CompanyService } from '../server/src/services/companyService.ts';
 
 const PORT = parseInt(process.env.PORT || '3000', 10);
 const BASE_URL = `http://127.0.0.1:${PORT}`;
@@ -314,6 +315,117 @@ async function runTests() {
   const creatorMember = newCompMembers.data.find((m: any) => m.email === adminUser.email);
   assert(Boolean(creatorMember), 'Creator is a member of the new company');
   assert(creatorMember.role_name === 'Administrator', 'Creator was automatically assigned Administrator role');
+
+  const demoteOnlyAdmin = await request(`/api/companies/members/${adminUser.id}/role`, {
+    method: 'PUT',
+    headers: { Authorization: `Bearer ${onboardRes.data.token}` },
+    body: JSON.stringify({ roleName: 'Staff' })
+  });
+  assert(demoteOnlyAdmin.status === 400, `Demoting the only Administrator is REJECTED with 400 (Status: ${demoteOnlyAdmin.status})`);
+
+  // -------------------------------------------------------------------------
+  // TEST 8: Cross-tenant references in request bodies (regression)
+  // -------------------------------------------------------------------------
+  console.log('\n--- TEST 8: Cross-Tenant References ---');
+  const comp2ClientRow = queryOne(`SELECT * FROM clients WHERE company_id = ? LIMIT 1`, [comp2.id]);
+  const today = new Date().toISOString().slice(0, 10);
+  const crossInvoice = await request(`/api/invoices`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${tokenAdminComp1}` },
+    body: JSON.stringify({
+      client_id: comp2ClientRow.id, currency: 'GHS', issue_date: today, due_date: today,
+      items: [{ description: 'x', quantity: 1, unit_price: 1 }]
+    })
+  });
+  assert(crossInvoice.status === 400, `Invoice for another tenant's client is REJECTED with 400 (Status: ${crossInvoice.status})`);
+
+  const crossPayment = await request(`/api/payments`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${tokenAdminComp1}` },
+    body: JSON.stringify({ client_id: comp2ClientRow.id, amount: 1, currency: 'GHS', payment_date: today, payment_method: 'Cash' })
+  });
+  assert(crossPayment.status === 400, `Payment for another tenant's client is REJECTED with 400 (Status: ${crossPayment.status})`);
+
+  const comp1Clients = queryOne(`SELECT COUNT(*) AS n FROM clients WHERE company_id = ?`, [comp1.id]);
+  const otherClient = queryOne(`SELECT * FROM clients WHERE company_id = ? AND id != ? LIMIT 1`, [comp1.id, unpaidInv.client_id]);
+  if (comp1Clients.n > 1 && otherClient) {
+    const mismatched = await request(`/api/payments`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${tokenAdminComp1}` },
+      body: JSON.stringify({ client_id: otherClient.id, invoice_id: unpaidInv.id, amount: 1, currency: unpaidInv.currency, payment_date: today, payment_method: 'Cash' })
+    });
+    assert(mismatched.status === 400, `Payment whose client differs from the invoice client is REJECTED with 400 (Status: ${mismatched.status})`);
+  }
+
+  // -------------------------------------------------------------------------
+  // TEST 9: Invites, temporary passwords & forced password change (regression)
+  // -------------------------------------------------------------------------
+  console.log('\n--- TEST 9: Invites & Temporary Passwords ---');
+  const bogusRole = await request(`/api/companies/members/invite`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${tokenAdminComp1}` },
+    body: JSON.stringify({ email: `role-${Date.now()}@example.com`, fullName: 'Role Test', roleName: 'Supreme Overlord' })
+  });
+  assert(bogusRole.status === 400, `Inviting with a non-existent role is REJECTED with 400 (Status: ${bogusRole.status})`);
+  assert(!queryOne(`SELECT 1 FROM roles WHERE name = 'Supreme Overlord'`), 'No role was created from request input');
+
+  const inviteeEmail = `invitee-${Date.now()}@example.com`;
+  const { temporaryPassword } = CompanyService.inviteMember(
+    comp1.id, { userId: adminUser.id, userName: adminUser.full_name },
+    { email: inviteeEmail, fullName: 'New Invitee', roleName: 'Staff' }
+  );
+  assert(Boolean(temporaryPassword) && temporaryPassword !== 'welcome123' && temporaryPassword!.length >= 16, 'New invitee receives a unique random temporary password');
+
+  const loginShared = await request(`/api/auth/login`, { method: 'POST', body: JSON.stringify({ email: inviteeEmail, password: 'welcome123' }) });
+  assert(loginShared.status === 401, `The old shared password "welcome123" does NOT work (Status: ${loginShared.status})`);
+
+  const loginTemp = await request(`/api/auth/login`, { method: 'POST', body: JSON.stringify({ email: inviteeEmail, password: temporaryPassword }) });
+  assert(loginTemp.status === 200 && loginTemp.data.user.mustChangePassword === true, 'Login with temporary password flags mustChangePassword');
+
+  const blocked = await request(`/api/invoices`, { headers: { Authorization: `Bearer ${loginTemp.data.token}` } });
+  assert(blocked.status === 403 && blocked.data.code === 'PASSWORD_CHANGE_REQUIRED', `API access is blocked until the password is changed (Status: ${blocked.status})`);
+
+  const weakChange = await request(`/api/auth/change-password`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${loginTemp.data.token}` },
+    body: JSON.stringify({ currentPassword: temporaryPassword, newPassword: 'short' })
+  });
+  assert(weakChange.status === 400, 'Too-short new password is REJECTED');
+
+  const goodChange = await request(`/api/auth/change-password`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${loginTemp.data.token}` },
+    body: JSON.stringify({ currentPassword: temporaryPassword, newPassword: 'a-much-better-password' })
+  });
+  assert(goodChange.status === 200, `Password change succeeds (Status: ${goodChange.status})`);
+
+  const unblocked = await request(`/api/invoices`, { headers: { Authorization: `Bearer ${loginTemp.data.token}` } });
+  assert(unblocked.status === 200, `API access restored after password change (Status: ${unblocked.status})`);
+
+  // -------------------------------------------------------------------------
+  // TEST 10: Login brute-force protection, CORS, unknown routes (regression)
+  // -------------------------------------------------------------------------
+  console.log('\n--- TEST 10: Login Rate Limiting, CORS & 404s ---');
+  const victim = `bruteforce-${Date.now()}@example.com`;
+  let lastStatus = 0;
+  for (let i = 0; i < 6; i++) {
+    const r = await request(`/api/auth/login`, { method: 'POST', body: JSON.stringify({ email: victim, password: `guess-${i}` }) });
+    lastStatus = r.status;
+  }
+  assert(lastStatus === 429, `6th consecutive failed login is throttled with 429 (Status: ${lastStatus})`);
+
+  const corsRes = await fetch(`${BASE_URL}/api/auth/me`, { headers: { Origin: 'https://evil.example', Authorization: `Bearer ${tokenAdminComp1}` } });
+  assert(!corsRes.headers.get('access-control-allow-origin'), 'API does not grant cross-origin access by default');
+
+  const unknownRoute = await request(`/api/does-not-exist`, { headers: { Authorization: `Bearer ${tokenAdminComp1}` } });
+  assert(unknownRoute.status === 404, `Unknown API route returns 404 (Status: ${unknownRoute.status})`);
+
+  const badJson = await fetch(`${BASE_URL}/api/clients`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${tokenAdminComp1}` },
+    body: '{not json'
+  });
+  assert(badJson.status === 400, `Malformed JSON returns 400 (Status: ${badJson.status})`);
 
   console.log('\n================================================================');
   console.log('🎯 ALL MULTI-TENANT ISOLATION & RBAC SECURITY TESTS PASSED 100%!');

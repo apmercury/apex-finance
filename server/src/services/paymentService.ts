@@ -1,4 +1,4 @@
-import { execute, queryAll, queryOne, runTransaction, sanitizeFk } from '../db/database.ts';
+import { execute, queryAll, queryOne, runTransaction, sanitizeFk, sanitizeTenantFk, requireTenantClient } from '../db/database.ts';
 import { SafeMoney } from '../utils/financialMath.ts';
 import { CurrencyService } from './currencyService.ts';
 import { ClientService } from './clientService.ts';
@@ -114,6 +114,14 @@ export class PaymentService {
         if (!invoice) {
           throw new Error('Invoice not found');
         }
+        // A payment against an invoice always belongs to that invoice's client
+        if (!dto.client_id) dto.client_id = invoice.client_id;
+        if (dto.client_id !== invoice.client_id) {
+          throw new Error('Payment client does not match the invoice client');
+        }
+        if (invoice.status === 'Cancelled' || invoice.status === 'Draft') {
+          throw new Error(`Cannot record a payment against a ${invoice.status} invoice`);
+        }
 
         // Validate currency alignment or exchange rate
         if (dto.currency.toUpperCase() !== invoice.currency.toUpperCase()) {
@@ -137,6 +145,8 @@ export class PaymentService {
         }
       }
 
+      requireTenantClient(dto.company_id, dto.client_id);
+
       // Base currency conversion
       const baseCurr = CurrencyService.getBaseCurrency(dto.company_id).code;
       if (!effectiveRate) {
@@ -159,7 +169,7 @@ export class PaymentService {
           dto.company_id,
           paymentNumber,
           dto.client_id,
-          sanitizeFk('invoices', dto.invoice_id),
+          sanitizeTenantFk('invoices', dto.invoice_id, dto.company_id),
           paymentAmount,
           dto.currency.toUpperCase(),
           effectiveRate,
