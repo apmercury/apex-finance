@@ -5,9 +5,16 @@ import { TaxService } from './taxService.ts';
 import { TemplateService } from './templateService.ts';
 import { PaymentNoteService } from './paymentNoteService.ts';
 import { AuditService } from './auditService.ts';
+import { RevenueService } from './revenueService.ts';
 import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+
+/** 16-character random password from an unambiguous alphabet (no 0/O, 1/l/I). */
+function generateTemporaryPassword(): string {
+  const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789';
+  return Array.from({ length: 16 }, () => alphabet[crypto.randomInt(alphabet.length)]).join('');
+}
 
 export interface CompanyOnboardInput {
   name: string;
@@ -314,30 +321,38 @@ export class CompanyService {
   /**
    * Invite or add a member to the company
    */
-  public static inviteMember(companyId: string, inviter: { userId: string; userName: string }, data: { email: string; fullName: string; roleName: string }): any {
+  /**
+   * Invite or add a member to the company.
+   * New accounts get a unique random temporary password (returned once so it can be emailed)
+   * and must change it on first login. Existing accounts keep their password.
+   */
+  public static inviteMember(
+    companyId: string,
+    inviter: { userId: string; userName: string },
+    data: { email: string; fullName: string; roleName: string }
+  ): { member: any; temporaryPassword: string | null } {
     return runTransaction(() => {
       const email = data.email.toLowerCase().trim();
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error('A valid email address is required');
+
+      // Only existing roles can be assigned; never create roles from request input
+      const targetRoleName = data.roleName || 'Staff';
+      const role = queryOne(`SELECT id FROM roles WHERE name = ?`, [targetRoleName]);
+      if (!role) throw new Error(`Role "${targetRoleName}" does not exist`);
+
       let user = queryOne(`SELECT * FROM users WHERE email = ?`, [email]);
+      let temporaryPassword: string | null = null;
 
       if (!user) {
-        // Create user with default temporary credentials
-        const cred = hashPassword('welcome123');
+        temporaryPassword = generateTemporaryPassword();
+        const cred = hashPassword(temporaryPassword);
         const newUserId = crypto.randomUUID();
         execute(
-          `INSERT INTO users (id, email, password_hash, salt, full_name, is_superadmin, status, created_at)
-           VALUES (?, ?, ?, ?, ?, 0, 'active', datetime('now'))`,
+          `INSERT INTO users (id, email, password_hash, salt, full_name, is_superadmin, status, must_change_password, created_at)
+           VALUES (?, ?, ?, ?, ?, 0, 'active', 1, datetime('now'))`,
           [newUserId, email, cred.hash, cred.salt, data.fullName.trim()]
         );
         user = queryOne(`SELECT * FROM users WHERE id = ?`, [newUserId]);
-      }
-
-      // Find role ID
-      const targetRoleName = data.roleName || 'Staff';
-      let role = queryOne(`SELECT id FROM roles WHERE name = ?`, [targetRoleName]);
-      if (!role) {
-        const roleId = crypto.randomUUID();
-        execute(`INSERT INTO roles (id, name, description) VALUES (?, ?, 'User role')`, [roleId, targetRoleName]);
-        role = { id: roleId };
       }
 
       // Check if membership already exists
@@ -369,7 +384,10 @@ export class CompanyService {
         newValue: { email: user.email, fullName: user.full_name, role: targetRoleName }
       });
 
-      return this.getCompanyMembers(companyId).find(m => m.user_id === user.id);
+      return {
+        member: this.getCompanyMembers(companyId).find(m => m.user_id === user.id),
+        temporaryPassword
+      };
     });
   }
 
@@ -379,6 +397,23 @@ export class CompanyService {
   public static updateMemberRole(companyId: string, actor: { userId: string; userName: string }, targetUserId: string, newRoleName: string): any {
     const role = queryOne(`SELECT id FROM roles WHERE name = ?`, [newRoleName]);
     if (!role) throw new Error(`Role "${newRoleName}" does not exist`);
+
+    const membership = queryOne(
+      `SELECT r.name AS role_name FROM company_users cu JOIN roles r ON cu.role_id = r.id
+       WHERE cu.company_id = ? AND cu.user_id = ? AND cu.is_active = 1`,
+      [companyId, targetUserId]
+    );
+    if (!membership) throw new Error('User is not a member of this company');
+
+    // Never leave a company without an Administrator
+    if (membership.role_name === 'Administrator' && newRoleName !== 'Administrator') {
+      const adminCount = queryOne<{ count: number }>(
+        `SELECT COUNT(*) AS count FROM company_users cu JOIN roles r ON cu.role_id = r.id
+         WHERE cu.company_id = ? AND r.name = 'Administrator' AND cu.is_active = 1`,
+        [companyId]
+      )?.count || 0;
+      if (adminCount <= 1) throw new Error('Cannot change the role of the only Administrator of the company.');
+    }
 
     execute(
       `UPDATE company_users SET role_id = ? WHERE company_id = ? AND user_id = ?`,
@@ -455,7 +490,8 @@ export class CompanyService {
         (SELECT COUNT(*) FROM company_users cu WHERE cu.company_id = c.id AND cu.is_active = 1) as member_count,
         (SELECT COUNT(*) FROM clients cl WHERE cl.company_id = c.id) as client_count,
         (SELECT COUNT(*) FROM invoices inv WHERE inv.company_id = c.id) as invoice_count,
-        (SELECT COALESCE(SUM(base_currency_amount), 0) FROM revenues rev WHERE rev.company_id = c.id) as total_revenue_base
+        (SELECT COALESCE(SUM(base_currency_amount), 0) FROM revenues
+           WHERE revenues.company_id = c.id AND ${RevenueService.NOT_REVERSED_SQL}) as total_revenue_base
       FROM companies c
       ORDER BY c.created_at DESC
     `;

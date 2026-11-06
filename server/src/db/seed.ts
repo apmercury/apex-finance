@@ -303,7 +303,8 @@ export function seedDemoData() {
     user_name: 'Alexander Vance'
   });
   // Check that its status automatically calculates to 'Overdue'
-  InvoiceService.updateInvoiceStatus(companyId, inv3.id, 'Overdue');
+  // 'Unpaid' = recalculate from payments and due date, which yields Overdue for a past due date
+  InvoiceService.updateInvoiceStatus(companyId, inv3.id, 'Unpaid');
 
   // Invoice 4: Unpaid (recent)
   const inv4 = InvoiceService.createInvoice({

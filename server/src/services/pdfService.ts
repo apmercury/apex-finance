@@ -4,8 +4,13 @@ import { SafeMoney } from '../utils/financialMath.ts';
 import { queryOne } from '../db/database.ts';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import * as os from 'node:os';
 import { execFileSync } from 'node:child_process';
 import puppeteer from 'puppeteer-core';
+import { escapeDeep, safeCssColor, safeCssFontFamily, sanitizeCustomCss } from '../utils/html.ts';
+
+// Only these remote origins may be fetched while rendering PDFs (web fonts)
+const ALLOWED_RENDER_ORIGINS = ['https://fonts.googleapis.com', 'https://fonts.gstatic.com'];
 
 function getChromeExecutablePath(): string {
   // 1. Check environment variable first
@@ -56,10 +61,11 @@ export class PdfService {
    * Render HTML for an Invoice with branding and selected template
    */
   public static renderInvoiceHtml(companyId: string, invoiceId: string): string {
-    const inv = InvoiceService.getInvoiceById(companyId, invoiceId);
+    // Every string from the database is HTML-escaped before it reaches the template
+    const inv = escapeDeep(InvoiceService.getInvoiceById(companyId, invoiceId));
     if (!inv) throw new Error('Invoice not found');
 
-    const company = queryOne(`SELECT * FROM companies WHERE id = ?`, [companyId]) || {
+    const company = escapeDeep(queryOne(`SELECT * FROM companies WHERE id = ?`, [companyId]) || {
       name: 'Apex Finance Ltd',
       email: 'finance@apexfin.com',
       phone: '+233 30 200 1234',
@@ -67,14 +73,19 @@ export class PdfService {
       tax_identification_number: 'C001298402',
       primary_color: '#0284c7',
       secondary_color: '#0f172a'
+    });
+
+    const rawTemplate: InvoiceTemplate = inv.template_id
+      ? (queryOne(`SELECT * FROM invoice_templates WHERE id = ? AND company_id = ?`, [inv.template_id, companyId]) || TemplateService.getDefaultTemplate(companyId))
+      : TemplateService.getDefaultTemplate(companyId);
+    const template: InvoiceTemplate = {
+      ...escapeDeep(rawTemplate),
+      font_family: safeCssFontFamily(rawTemplate?.font_family, 'Inter, sans-serif'),
+      custom_css: sanitizeCustomCss(rawTemplate?.custom_css)
     };
 
-    const template: InvoiceTemplate = inv.template_id
-      ? (queryOne(`SELECT * FROM invoice_templates WHERE id = ?`, [inv.template_id]) || TemplateService.getDefaultTemplate(companyId))
-      : TemplateService.getDefaultTemplate(companyId);
-
-    const primary = template.primary_color || company.primary_color || '#0284c7';
-    const secondary = template.secondary_color || company.secondary_color || '#0f172a';
+    const primary = safeCssColor(rawTemplate?.primary_color, safeCssColor(company.primary_color, '#0284c7'));
+    const secondary = safeCssColor(rawTemplate?.secondary_color, safeCssColor(company.secondary_color, '#0f172a'));
     const currency = inv.currency;
     const progress = Math.min(100, Math.max(0, inv.payment_percentage || 0));
 
@@ -275,7 +286,7 @@ export class PdfService {
    * Render HTML for Payment Receipt
    */
   public static renderReceiptHtml(companyId: string, paymentId: string): string {
-    const payment = queryOne(
+    const payment = escapeDeep(queryOne(
       `SELECT p.*, c.company_name, c.email as client_email, c.phone as client_phone, c.address as client_address, c.tax_id as client_tax_id,
               i.invoice_number, i.total_amount as invoice_total, i.balance_due as invoice_balance, i.currency as invoice_currency, i.issue_date as invoice_date
        FROM payments p
@@ -283,19 +294,19 @@ export class PdfService {
        LEFT JOIN invoices i ON p.invoice_id = i.id
        WHERE p.id = ? AND p.company_id = ?`,
       [paymentId, companyId]
-    );
+    ));
     if (!payment) throw new Error('Payment not found');
 
-    const company = queryOne(`SELECT * FROM companies WHERE id = ?`, [companyId]) || {
+    const company = escapeDeep(queryOne(`SELECT * FROM companies WHERE id = ?`, [companyId]) || {
       name: 'Apex Finance Ltd',
       email: 'finance@apexfin.com',
       phone: '+233 30 200 1234',
       address: 'Financial District, Accra, Ghana',
       tax_identification_number: 'C001298402',
       primary_color: '#0284c7'
-    };
+    });
 
-    const primaryColor = company.primary_color || '#0284c7';
+    const primaryColor = safeCssColor(company.primary_color, '#0284c7');
     const formattedAmount = SafeMoney.format(payment.amount, payment.currency + ' ');
 
     return `
@@ -622,6 +633,16 @@ export class PdfService {
       });
       try {
         const page = await browser.newPage();
+        // Templates never need scripts; block them and any network access except web fonts
+        await page.setJavaScriptEnabled(false);
+        await page.setRequestInterception(true);
+        page.on('request', request => {
+          const reqUrl = request.url();
+          const allowed = reqUrl.startsWith('data:') || reqUrl === 'about:blank' ||
+            ALLOWED_RENDER_ORIGINS.some(origin => reqUrl.startsWith(origin + '/'));
+          if (allowed) request.continue();
+          else request.abort();
+        });
         await page.setContent(html, { waitUntil: 'load' });
         await page.pdf({
           path: outputPath,
@@ -638,8 +659,8 @@ export class PdfService {
     }
 
     // 2. Secondary Fallback: Isolated CLI execution with dedicated temp user data directory
-    const tempHtmlPath = path.join('/tmp', `pdf_${Date.now()}_${Math.random().toString(36).substring(7)}.html`);
-    const tempUserDataDir = fs.mkdtempSync('/tmp/chrome_pdf_');
+    const tempHtmlPath = path.join(os.tmpdir(), `pdf_${Date.now()}_${Math.random().toString(36).substring(7)}.html`);
+    const tempUserDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'chrome_pdf_'));
     fs.writeFileSync(tempHtmlPath, html, 'utf8');
 
     try {
@@ -651,6 +672,7 @@ export class PdfService {
         '--no-default-browser-check',
         '--disable-background-networking',
         '--disable-extensions',
+        '--blink-settings=scriptEnabled=false',
         `--user-data-dir=${tempUserDataDir}`,
         '--print-to-pdf-no-header',
         `--print-to-pdf=${outputPath}`,

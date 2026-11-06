@@ -1,9 +1,10 @@
-import { execute, queryAll, queryOne, sanitizeFk } from '../db/database.ts';
+import { execute, queryAll, queryOne, sanitizeFk, sanitizeTenantFk } from '../db/database.ts';
 import { SafeMoney } from '../utils/financialMath.ts';
 import { CurrencyService } from './currencyService.ts';
 import { AuditService } from './auditService.ts';
 import { NotificationService } from './notificationService.ts';
 import { sseService } from './sseService.ts';
+import { requireCompanyCurrency, requireIsoDate, requireNumberInRange, requirePaymentMethod, requireText, optionalExchangeRate } from '../utils/validation.ts';
 import * as crypto from 'node:crypto';
 
 export interface ExpenseCategory {
@@ -59,8 +60,17 @@ export class ExpenseService {
 
   public static createExpense(dto: ExpenseInput): any {
     const amount = Number(dto.amount);
-    if (isNaN(amount) || amount <= 0) {
+    if (!Number.isFinite(amount) || amount <= 0) {
       throw new Error('Expense amount must be greater than zero');
+    }
+    dto.vendor = requireText(dto.vendor, 'Vendor', 200);
+    dto.description = requireText(dto.description, 'Description');
+    dto.currency = requireCompanyCurrency(dto.company_id, dto.currency);
+    requireIsoDate(dto.expense_date, 'Expense date');
+    dto.payment_method = requirePaymentMethod(dto.payment_method || 'Bank Transfer');
+    dto.exchange_rate = optionalExchangeRate(dto.exchange_rate);
+    if (dto.tax_amount !== undefined && dto.tax_amount !== null && (dto.tax_amount as any) !== '') {
+      requireNumberInRange(dto.tax_amount, 'Tax amount', 0, amount);
     }
 
     let categoryId = dto.category_id;
@@ -84,7 +94,7 @@ export class ExpenseService {
       [
         id,
         dto.company_id,
-        sanitizeFk('expense_categories', categoryId),
+        sanitizeTenantFk('expense_categories', categoryId, dto.company_id),
         dto.vendor,
         dto.description,
         amount,

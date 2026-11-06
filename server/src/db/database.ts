@@ -376,10 +376,6 @@ export function initDatabase() {
       is_system INTEGER DEFAULT 0,
       created_at TEXT DEFAULT CURRENT_TIMESTAMP
     );
-
-    -- Ensure default user placeholder exists for default unauthenticated API operations
-    INSERT OR IGNORE INTO users (id, email, password_hash, salt, full_name, is_superadmin, status)
-    VALUES ('u_admin_default', 'admin@apexfin.com', 'seeded', 'seeded', 'Alexander Vance (Admin)', 1, 'active');
   `);
 
   // Safe schema migrations for existing SQLite databases
@@ -389,6 +385,7 @@ export function initDatabase() {
   ensureColumnExists('company_users', 'invitation_status', "TEXT DEFAULT 'accepted'");
   ensureColumnExists('company_users', 'invited_by', 'TEXT');
   ensureColumnExists('company_users', 'joined_at', "TEXT");
+  ensureColumnExists('users', 'must_change_password', 'INTEGER DEFAULT 0');
 }
 
 function ensureColumnExists(table: string, column: string, definition: string) {
@@ -456,5 +453,32 @@ export function sanitizeFk(tableName: string, id: any): string | null {
   const cleanId = id.trim();
   const row = queryOne(`SELECT id FROM ${tableName} WHERE id = ?`, [cleanId]);
   return row ? cleanId : null;
+}
+
+// Tenant-owned tables that may be referenced from request bodies
+const TENANT_TABLES = new Set(['clients', 'invoices', 'invoice_templates', 'tax_rates', 'expense_categories', 'payments']);
+
+/**
+ * Like sanitizeFk, but only accepts an id that belongs to the given company.
+ * Use for every company-owned reference that arrives in a request body; a plain
+ * existence check would let one tenant link records to another tenant's data.
+ */
+export function sanitizeTenantFk(tableName: string, id: any, companyId: string): string | null {
+  if (!TENANT_TABLES.has(tableName)) throw new Error(`sanitizeTenantFk: ${tableName} is not a tenant table`);
+  if (!id || typeof id !== 'string' || id.trim() === '' || id === 'null' || id === 'undefined') {
+    return null;
+  }
+  const cleanId = id.trim();
+  const row = queryOne(`SELECT id FROM ${tableName} WHERE id = ? AND company_id = ?`, [cleanId, companyId]);
+  return row ? cleanId : null;
+}
+
+/** Throw unless the client exists and belongs to the company. Returns the client row. */
+export function requireTenantClient(companyId: string, clientId: any): any {
+  const client = typeof clientId === 'string' && clientId
+    ? queryOne(`SELECT * FROM clients WHERE id = ? AND company_id = ?`, [clientId, companyId])
+    : null;
+  if (!client) throw new Error('Client not found');
+  return client;
 }
 

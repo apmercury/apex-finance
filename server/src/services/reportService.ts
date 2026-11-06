@@ -1,6 +1,7 @@
 import { queryAll, queryOne } from '../db/database.ts';
 import { SafeMoney } from '../utils/financialMath.ts';
 import { CurrencyService } from './currencyService.ts';
+import { RevenueService } from './revenueService.ts';
 
 export class ReportService {
   /**
@@ -11,7 +12,8 @@ export class ReportService {
     const targetCurrency = reportingCurrency || baseCurr;
     const targetRate = CurrencyService.getExchangeRate(companyId, baseCurr, targetCurrency);
 
-    let revSql = `SELECT * FROM revenues WHERE company_id = ?`;
+    // Revenue from a payment that was later reversed is not revenue
+    let revSql = `SELECT * FROM revenues WHERE company_id = ? AND ${RevenueService.NOT_REVERSED_SQL}`;
     const revParams: any[] = [companyId];
     if (startDate) { revSql += ` AND revenue_date >= ?`; revParams.push(startDate); }
     if (endDate) { revSql += ` AND revenue_date <= ?`; revParams.push(endDate); }

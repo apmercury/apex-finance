@@ -1,9 +1,15 @@
+import './env.ts';
 import * as http from 'node:http';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as url from 'node:url';
 import { handleApiRequest } from './routes/api.ts';
 import { seedDemoData } from './db/seed.ts';
+import { getJwtSecret } from './utils/security.ts';
+import { InvoiceService } from './services/invoiceService.ts';
+
+// Fail fast on missing production secrets instead of at the first login
+getJwtSecret();
 
 const PORT = parseInt(process.env.PORT || '3000', 10);
 const HOST = process.env.HOST || '127.0.0.1';
@@ -25,6 +31,18 @@ const MIME_TYPES: Record<string, string> = {
 // Seed initial database if needed
 seedDemoData();
 
+// Flip past-due invoices to Overdue now and hourly (status otherwise only changes on payment)
+function runOverdueSweep() {
+  try {
+    const count = InvoiceService.refreshOverdueStatuses();
+    if (count > 0) console.log(`[Scheduler] Marked ${count} invoice(s) as Overdue`);
+  } catch (e) {
+    console.error('[Scheduler] Overdue sweep failed:', e);
+  }
+}
+runOverdueSweep();
+setInterval(runOverdueSweep, 60 * 60 * 1000).unref();
+
 const server = http.createServer(async (req, res) => {
   try {
     const parsedUrl = url.parse(req.url || '', true);
@@ -34,6 +52,10 @@ const server = http.createServer(async (req, res) => {
     if (pathname.startsWith('/api/')) {
       const handled = await handleApiRequest(req, res);
       if (handled) return;
+      // Unknown API routes must not fall through to the SPA's index.html
+      res.writeHead(404, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'API route not found' }));
+      return;
     }
 
     // 2. Static File Serving from client/public
@@ -69,20 +91,23 @@ const server = http.createServer(async (req, res) => {
     res.writeHead(404, { 'Content-Type': 'text/plain' });
     res.end('Not Found');
   } catch (error: any) {
-    console.error('Server error:', error);
+    // Malformed request bodies are client errors; anything else is logged but not exposed
+    const status = error?.message === 'Invalid JSON' ? 400 : error?.message === 'Payload too large' ? 413 : 500;
+    if (status === 500) console.error('Server error:', error);
     if (!res.headersSent) {
-      res.writeHead(500, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: error.message }));
+      res.writeHead(status, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: status === 500 ? 'Internal server error' : error.message }));
     }
   }
 });
 
 server.on('error', (e: any) => {
   if (e.code === 'EADDRINUSE') {
-    // Port is already occupied (e.g. tests running against active daemon instance)
-  } else {
-    console.error('Server error:', e);
+    // Fail loudly: silently continuing makes tests hit whatever other process owns the port
+    console.error(`Port ${PORT} is already in use. Stop the other process or set PORT to a free port.`);
+    process.exit(1);
   }
+  console.error('Server error:', e);
 });
 
 server.listen(PORT, HOST, () => {

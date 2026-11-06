@@ -82,6 +82,9 @@ export class CurrencyService {
   }
 
   public static setBaseCurrency(companyId: string, currencyCode: string): void {
+    if (!queryOne(`SELECT 1 FROM currencies WHERE company_id = ? AND code = ?`, [companyId, currencyCode])) {
+      throw new Error(`Currency ${currencyCode} is not configured for this company`);
+    }
     execute(`UPDATE currencies SET is_base = 0 WHERE company_id = ?`, [companyId]);
     execute(`UPDATE currencies SET is_base = 1, is_active = 1 WHERE company_id = ? AND code = ?`, [companyId, currencyCode]);
     execute(`UPDATE companies SET default_currency = ? WHERE id = ?`, [currencyCode, companyId]);

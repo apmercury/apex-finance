@@ -1,6 +1,25 @@
 import * as crypto from 'node:crypto';
 
-const JWT_SECRET = process.env.JWT_SECRET || 'apex-finance-enterprise-secret-key-2026-safe-production';
+const DEV_FALLBACK_SECRET = crypto.randomBytes(32).toString('hex');
+let warnedAboutSecret = false;
+
+/**
+ * Resolve the JWT signing secret.
+ * Production refuses to run without a strong JWT_SECRET. Development uses a random
+ * per-process secret (tokens stop working on restart) instead of a value shipped in source.
+ */
+export function getJwtSecret(): string {
+  const secret = process.env.JWT_SECRET;
+  if (secret && secret.length >= 32) return secret;
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error('JWT_SECRET must be set to at least 32 characters when NODE_ENV=production');
+  }
+  if (!warnedAboutSecret) {
+    warnedAboutSecret = true;
+    console.warn('[Security] JWT_SECRET missing or shorter than 32 chars; using a random development secret.');
+  }
+  return DEV_FALLBACK_SECRET;
+}
 
 export interface TokenPayload {
   userId: string;
@@ -25,8 +44,10 @@ export function hashPassword(password: string): { salt: string; hash: string } {
  * Verify password against salt and hash
  */
 export function verifyPassword(password: string, salt: string, storedHash: string): boolean {
-  const hash = crypto.pbkdf2Sync(password, salt, 100000, 64, 'sha512').toString('hex');
-  return crypto.timingSafeEqual(Buffer.from(hash, 'hex'), Buffer.from(storedHash, 'hex'));
+  const hash = crypto.pbkdf2Sync(password, salt, 100000, 64, 'sha512');
+  const stored = Buffer.from(storedHash || '', 'hex');
+  if (stored.length !== hash.length) return false;
+  return crypto.timingSafeEqual(hash, stored);
 }
 
 /**
@@ -42,7 +63,7 @@ export function createToken(payload: TokenPayload, expiresInHours: number = 24):
   const payloadEncoded = encode(fullPayload);
   const data = `${headerEncoded}.${payloadEncoded}`;
 
-  const signature = crypto.createHmac('sha256', JWT_SECRET).update(data).digest('base64url');
+  const signature = crypto.createHmac('sha256', getJwtSecret()).update(data).digest('base64url');
   return `${data}.${signature}`;
 }
 
@@ -54,8 +75,12 @@ export function verifyToken(token: string): TokenPayload | null {
     const parts = token.split('.');
     if (parts.length !== 3) return null;
     const [headerB64, payloadB64, sig] = parts;
-    const expectedSig = crypto.createHmac('sha256', JWT_SECRET).update(`${headerB64}.${payloadB64}`).digest('base64url');
-    if (!crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expectedSig))) {
+    const header = JSON.parse(Buffer.from(headerB64, 'base64url').toString('utf8'));
+    if (header?.alg !== 'HS256') return null;
+    const expectedSig = crypto.createHmac('sha256', getJwtSecret()).update(`${headerB64}.${payloadB64}`).digest('base64url');
+    const sigBuf = Buffer.from(sig);
+    const expectedBuf = Buffer.from(expectedSig);
+    if (sigBuf.length !== expectedBuf.length || !crypto.timingSafeEqual(sigBuf, expectedBuf)) {
       return null;
     }
     const payload = JSON.parse(Buffer.from(payloadB64, 'base64url').toString('utf8'));

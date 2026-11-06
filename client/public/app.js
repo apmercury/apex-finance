@@ -29,6 +29,14 @@ const state = {
 
 let listenersInitialized = false;
 
+// HTML-escape any value before interpolating it into markup (innerHTML templates).
+// Every piece of server or user data rendered via a template literal must go through esc().
+const HTML_ESCAPES = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
+function esc(value) {
+  if (value === null || value === undefined) return '';
+  return String(value).replace(/[&<>"']/g, ch => HTML_ESCAPES[ch]);
+}
+
 // API Helper with Multi-Tenant Bearer Authentication
 async function api(path, options = {}) {
   const token = localStorage.getItem('apex_token');
@@ -44,6 +52,7 @@ async function api(path, options = {}) {
   }
   if (!res.ok) {
     const err = await res.json().catch(() => ({ error: res.statusText }));
+    if (err.code === 'PASSWORD_CHANGE_REQUIRED') showPasswordChangeOverlay();
     throw new Error(err.error || 'Request failed');
   }
   return res.json();
@@ -59,6 +68,44 @@ function hideAuthOverlay() {
   if (overlay) overlay.style.display = 'none';
 }
 
+let passwordChangeFormBound = false;
+function showPasswordChangeOverlay() {
+  const overlay = document.getElementById('password-change-overlay');
+  if (!overlay) return;
+  overlay.style.display = 'flex';
+  if (passwordChangeFormBound) return;
+  passwordChangeFormBound = true;
+
+  document.getElementById('form-password-change').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const currentPassword = document.getElementById('pwc-current').value;
+    const newPassword = document.getElementById('pwc-new').value;
+    const confirmPassword = document.getElementById('pwc-confirm').value;
+    if (newPassword !== confirmPassword) {
+      showToast('The new passwords do not match', 'error');
+      return;
+    }
+    try {
+      await api('/auth/change-password', {
+        method: 'POST',
+        body: JSON.stringify({ currentPassword, newPassword })
+      });
+      overlay.style.display = 'none';
+      e.target.reset();
+      showToast('Password updated', 'success');
+      await initApp();
+    } catch (err) {
+      showToast(err.message, 'error');
+    }
+  });
+
+  document.getElementById('pwc-logout').addEventListener('click', () => {
+    localStorage.removeItem('apex_token');
+    overlay.style.display = 'none';
+    showAuthOverlay();
+  });
+}
+
 // Toast notification helper
 function showToast(message, type = 'info') {
   const container = document.getElementById('toast-container');
@@ -67,7 +114,7 @@ function showToast(message, type = 'info') {
   toast.className = `toast toast-${type}`;
   toast.innerHTML = `
     <span>${type === 'success' ? '✓' : type === 'error' ? '✕' : 'ℹ'}</span>
-    <span>${message}</span>
+    <span>${esc(message)}</span>
   `;
   container.appendChild(toast);
   setTimeout(() => toast.classList.add('show'), 10);
@@ -81,7 +128,7 @@ function showToast(message, type = 'info') {
 function formatMoney(amount, currencyCode = 'GHS', precision = 2) {
   const num = typeof amount === 'number' ? amount : parseFloat(amount) || 0;
   const curr = state.currencies.find(c => c.code === currencyCode) || { symbol: currencyCode + ' ' };
-  return `${curr.symbol} ${num.toLocaleString('en-US', { minimumFractionDigits: precision, maximumFractionDigits: precision })}`;
+  return `${esc(curr.symbol)} ${num.toLocaleString('en-US', { minimumFractionDigits: precision, maximumFractionDigits: precision })}`;
 }
 
 // Safe formatting for base currency
@@ -129,17 +176,17 @@ function updateCompanySwitcher() {
       const isActive = c.id === comp.id;
       const initials = c.name.split(' ').map(w => w[0]).join('').substring(0, 2).toUpperCase();
       return `
-        <div class="company-switch-item ${isActive ? 'active' : ''}" data-company-id="${c.id}" style="padding: 10px 14px; border-bottom: 1px solid #f1f5f9; display: flex; align-items: center; justify-content: space-between; cursor: pointer; transition: background 0.15s ease; ${isActive ? 'background: #f0fdf4;' : ''}">
+        <div class="company-switch-item ${isActive ? 'active' : ''}" data-company-id="${esc(c.id)}" style="padding: 10px 14px; border-bottom: 1px solid #f1f5f9; display: flex; align-items: center; justify-content: space-between; cursor: pointer; transition: background 0.15s ease; ${isActive ? 'background: #f0fdf4;' : ''}">
           <div style="display: flex; align-items: center; gap: 10px; min-width: 0;">
             <div style="width: 28px; height: 28px; border-radius: 6px; background: ${isActive ? '#16a34a' : '#0284c7'}; color: white; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 11px; flex-shrink: 0;">
-              ${initials}
+              ${esc(initials)}
             </div>
             <div style="min-width: 0;">
               <div style="font-weight: 600; font-size: 13px; color: #0f172a; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 170px;">
-                ${c.name}
+                ${esc(c.name)}
               </div>
               <div style="font-size: 11px; color: #64748b;">
-                ${c.role_name || 'Member'} &bull; <span style="font-weight: 600; color: #0284c7;">${c.default_currency || 'USD'}</span>
+                ${esc(c.role_name || 'Member')} &bull; <span style="font-weight: 600; color: #0284c7;">${esc(c.default_currency || 'USD')}</span>
               </div>
             </div>
           </div>
@@ -270,6 +317,12 @@ async function initApp() {
     state.myCompanies = authData.myCompanies || [];
 
     hideAuthOverlay();
+
+    // Temporary-password accounts must set their own password before using the app
+    if (authData.user.mustChangePassword) {
+      showPasswordChangeOverlay();
+      return;
+    }
     updateSidebarUser();
     updateCompanySwitcher();
 
@@ -377,7 +430,7 @@ async function renderCurrentView() {
         await renderDashboard(container);
     }
   } catch (err) {
-    container.innerHTML = `<div style="padding: 30px; background: #fee2e2; border-radius: 12px; color: #b91c1c;">Error loading view: ${err.message}</div>`;
+    container.innerHTML = `<div style="padding: 30px; background: #fee2e2; border-radius: 12px; color: #b91c1c;">Error loading view: ${esc(err.message)}</div>`;
   }
 }
 
@@ -403,7 +456,7 @@ async function renderDashboard(container) {
       <div>
         <h1 style="font-size: 24px; font-weight: 800; color: #0f172a; letter-spacing: -0.02em;">Financial Overview</h1>
         <p style="font-size: 13px; color: #64748b; margin-top: 2px;">
-          ${data.conversionNote}
+          ${esc(data.conversionNote)}
         </p>
       </div>
 
@@ -420,9 +473,9 @@ async function renderDashboard(container) {
         </select>
 
         <select id="dash-currency-select" class="form-control" style="width: 170px; font-size: 13px; font-weight: 600;">
-          <option value="${state.baseCurrency.code}" ${state.dashboardSelectedCurrency === state.baseCurrency.code ? 'selected' : ''}>Base: ${state.baseCurrency.code} (${state.baseCurrency.symbol})</option>
+          <option value="${esc(state.baseCurrency.code)}" ${state.dashboardSelectedCurrency === state.baseCurrency.code ? 'selected' : ''}>Base: ${esc(state.baseCurrency.code)} (${esc(state.baseCurrency.symbol)})</option>
           ${state.currencies.filter(c => c.code !== state.baseCurrency.code).map(c => `
-            <option value="${c.code}" ${state.dashboardSelectedCurrency === c.code ? 'selected' : ''}>Currency: ${c.code} (${c.symbol})</option>
+            <option value="${esc(c.code)}" ${state.dashboardSelectedCurrency === c.code ? 'selected' : ''}>Currency: ${esc(c.code)} (${esc(c.symbol)})</option>
           `).join('')}
         </select>
       </div>
@@ -431,7 +484,7 @@ async function renderDashboard(container) {
     ${data.isConverted ? `
       <div style="background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 10px; padding: 12px 18px; margin-bottom: 24px; display: flex; align-items: center; gap: 10px; font-size: 13px; color: #1e40af;">
         <span style="font-size: 16px;">ℹ️</span>
-        <span>Multi-currency consolidated view: Values converted into <strong>${data.reportingCurrency}</strong> using recorded exchange rates. Historical transaction amounts remain unaltered.</span>
+        <span>Multi-currency consolidated view: Values converted into <strong>${esc(data.reportingCurrency)}</strong> using recorded exchange rates. Historical transaction amounts remain unaltered.</span>
       </div>
     ` : ''}
 
@@ -518,7 +571,7 @@ async function renderDashboard(container) {
             <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/></svg>
           </div>
         </div>
-        <div class="stat-value">${s.clientCount}</div>
+        <div class="stat-value">${esc(s.clientCount)}</div>
         <div class="stat-footer" style="color: #64748b; font-size: 11px;">Registered client accounts</div>
       </div>
 
@@ -530,7 +583,7 @@ async function renderDashboard(container) {
             <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/></svg>
           </div>
         </div>
-        <div class="stat-value">${s.outstandingInvoicesCount}</div>
+        <div class="stat-value">${esc(s.outstandingInvoicesCount)}</div>
         <div class="stat-footer" style="color: #64748b; font-size: 11px;">Awaiting partial or full settlement</div>
       </div>
     </div>
@@ -542,7 +595,7 @@ async function renderDashboard(container) {
         <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px;">
           <div>
             <h3 style="font-size: 16px; font-weight: 700; color: #0f172a;">Revenue vs Expenses Trend</h3>
-            <p style="font-size: 12px; color: #64748b;">Monthly cash inflow vs outflows (${data.reportingCurrency})</p>
+            <p style="font-size: 12px; color: #64748b;">Monthly cash inflow vs outflows (${esc(data.reportingCurrency)})</p>
           </div>
           <div style="display: flex; gap: 14px; font-size: 12px; font-weight: 600;">
             <span style="display: flex; align-items: center; gap: 6px;"><span style="width: 10px; height: 10px; background: #0284c7; border-radius: 2px;"></span> Revenue</span>
@@ -564,11 +617,11 @@ async function renderDashboard(container) {
               return `
                 <div style="margin-bottom: 14px;">
                   <div style="display: flex; justify-content: space-between; font-size: 12px; margin-bottom: 4px;">
-                    <span style="font-weight: 600; color: #334155;">${cat.name}</span>
+                    <span style="font-weight: 600; color: #334155;">${esc(cat.name)}</span>
                     <span style="font-weight: 700; color: #0f172a;">${formatMoney(cat.value, data.reportingCurrency)}</span>
                   </div>
                   <div class="progress-bar-wrap">
-                    <div class="progress-bar-fill" style="width: ${pct}%; background: #ef4444;"></div>
+                    <div class="progress-bar-fill" style="width: ${esc(pct)}%; background: #ef4444;"></div>
                   </div>
                 </div>
               `;
@@ -588,14 +641,14 @@ async function renderDashboard(container) {
           <thead>
             <tr>
               <th>Client</th>
-              <th style="text-align: right;">Total Paid (${data.reportingCurrency})</th>
+              <th style="text-align: right;">Total Paid (${esc(data.reportingCurrency)})</th>
             </tr>
           </thead>
           <tbody>
             ${data.charts.revenueByClient.length === 0 ? '<tr><td colspan="2" style="text-align:center; color:#94a3b8;">No client payments recorded</td></tr>' :
               data.charts.revenueByClient.map(c => `
                 <tr>
-                  <td style="font-weight: 600; color: #0f172a;">${c.name}</td>
+                  <td style="font-weight: 600; color: #0f172a;">${esc(c.name)}</td>
                   <td style="text-align: right; font-weight: 700; color: #16a34a;">${formatMoney(c.value, data.reportingCurrency)}</td>
                 </tr>
               `).join('')
@@ -619,8 +672,8 @@ async function renderDashboard(container) {
           <tbody>
             ${data.charts.revenueByCurrency.map(c => `
               <tr>
-                <td><span class="badge badge-unpaid">${c.currency}</span></td>
-                <td>${c.count} payments</td>
+                <td><span class="badge badge-unpaid">${esc(c.currency)}</span></td>
+                <td>${esc(c.count)} payments</td>
                 <td style="text-align: right; font-weight: 700;">${formatMoney(c.original_amount, c.currency)}</td>
               </tr>
             `).join('')}
@@ -663,25 +716,25 @@ function renderBarChartSvg(trends, currencyCode) {
     return `
       <g>
         <!-- Revenue Bar -->
-        <rect x="${x}" y="${revY}" width="${barWidth}" height="${revH}" rx="4" fill="#0284c7">
-          <title>${t.month} Revenue: ${formatMoney(t.revenue, currencyCode)}</title>
+        <rect x="${esc(x)}" y="${esc(revY)}" width="${esc(barWidth)}" height="${esc(revH)}" rx="4" fill="#0284c7">
+          <title>${esc(t.month)} Revenue: ${formatMoney(t.revenue, currencyCode)}</title>
         </rect>
         <!-- Expense Bar -->
-        <rect x="${x + barWidth + 4}" y="${expY}" width="${barWidth}" height="${expH}" rx="4" fill="#ef4444">
-          <title>${t.month} Expenses: ${formatMoney(t.expenses, currencyCode)}</title>
+        <rect x="${esc(x + barWidth + 4)}" y="${esc(expY)}" width="${esc(barWidth)}" height="${esc(expH)}" rx="4" fill="#ef4444">
+          <title>${esc(t.month)} Expenses: ${formatMoney(t.expenses, currencyCode)}</title>
         </rect>
         <!-- Label -->
-        <text x="${x + barWidth}" y="${chartHeight + 36}" font-size="11" fill="#64748b" text-anchor="middle" font-family="sans-serif">${t.month}</text>
+        <text x="${esc(x + barWidth)}" y="${esc(chartHeight + 36)}" font-size="11" fill="#64748b" text-anchor="middle" font-family="sans-serif">${esc(t.month)}</text>
       </g>
     `;
   }).join('');
 
   return `
     <div style="overflow-x: auto; width: 100%;">
-      <svg width="100%" height="220" viewBox="0 0 ${svgWidth} 220" style="min-width: 450px;">
-        <line x1="30" y1="20" x2="${svgWidth - 20}" y2="20" stroke="#f1f5f9" stroke-width="1"/>
-        <line x1="30" y1="110" x2="${svgWidth - 20}" y2="110" stroke="#f1f5f9" stroke-width="1"/>
-        <line x1="30" y1="${chartHeight + 20}" x2="${svgWidth - 20}" y2="${chartHeight + 20}" stroke="#e2e8f0" stroke-width="1"/>
+      <svg width="100%" height="220" viewBox="0 0 ${esc(svgWidth)} 220" style="min-width: 450px;">
+        <line x1="30" y1="20" x2="${esc(svgWidth - 20)}" y2="20" stroke="#f1f5f9" stroke-width="1"/>
+        <line x1="30" y1="110" x2="${esc(svgWidth - 20)}" y2="110" stroke="#f1f5f9" stroke-width="1"/>
+        <line x1="30" y1="${esc(chartHeight + 20)}" x2="${esc(svgWidth - 20)}" y2="${esc(chartHeight + 20)}" stroke="#e2e8f0" stroke-width="1"/>
         ${bars}
       </svg>
     </div>
@@ -710,8 +763,8 @@ async function renderInvoices(container) {
     <!-- Status Tabs -->
     <div style="display: flex; gap: 8px; margin-bottom: 20px; border-bottom: 1px solid var(--border); padding-bottom: 12px; overflow-x: auto;">
       ${['all', 'Unpaid', 'Partially Paid', 'Paid', 'Overdue', 'Draft'].map(st => `
-        <button class="btn btn-sm ${state.currentInvoiceFilter === st ? 'btn-primary' : 'btn-secondary'}" data-inv-filter="${st}">
-          ${st.charAt(0).toUpperCase() + st.slice(1)}
+        <button class="btn btn-sm ${state.currentInvoiceFilter === st ? 'btn-primary' : 'btn-secondary'}" data-inv-filter="${esc(st)}">
+          ${esc(st.charAt(0).toUpperCase() + st.slice(1))}
         </button>
       `).join('')}
     </div>
@@ -743,17 +796,17 @@ async function renderInvoices(container) {
             return `
             <tr>
               <td>
-                <div style="font-weight: 700; color: #0284c7;">${inv.invoice_number}</div>
-                <div style="font-size: 11px; color: #94a3b8;">Rate: ${inv.exchange_rate} to base</div>
+                <div style="font-weight: 700; color: #0284c7;">${esc(inv.invoice_number)}</div>
+                <div style="font-size: 11px; color: #94a3b8;">Rate: ${esc(inv.exchange_rate)} to base</div>
               </td>
               <td>
-                <div style="font-weight: 600; color: #0f172a;">${inv.client_name}</div>
-                <div style="font-size: 11px; color: #64748b;">${inv.client_email || ''}</div>
+                <div style="font-weight: 600; color: #0f172a;">${esc(inv.client_name)}</div>
+                <div style="font-size: 11px; color: #64748b;">${esc(inv.client_email || '')}</div>
               </td>
               <td>
-                <div>${inv.issue_date}</div>
+                <div>${esc(inv.issue_date)}</div>
                 <div style="font-size: 11px; color: ${inv.status === 'Overdue' ? '#dc2626' : '#64748b'}; font-weight: ${inv.status === 'Overdue' ? '700' : 'normal'};">
-                  Due: ${inv.due_date}
+                  Due: ${esc(inv.due_date)}
                 </div>
               </td>
               <td>
@@ -762,11 +815,11 @@ async function renderInvoices(container) {
               </td>
               <td style="min-width: 140px;">
                 <div style="display: flex; justify-content: space-between; font-size: 11px; margin-bottom: 4px; font-weight: 600;">
-                  <span>${inv.payment_percentage}% Paid</span>
+                  <span>${esc(inv.payment_percentage)}% Paid</span>
                   <span>${formatMoney(inv.amount_paid, inv.currency)}</span>
                 </div>
                 <div class="progress-bar-wrap">
-                  <div class="progress-bar-fill" style="width: ${inv.payment_percentage}%;"></div>
+                  <div class="progress-bar-fill" style="width: ${esc(inv.payment_percentage)}%;"></div>
                 </div>
               </td>
               <td>
@@ -775,24 +828,24 @@ async function renderInvoices(container) {
                 </div>
               </td>
               <td>
-                <span class="badge badge-${inv.status.toLowerCase().replace(/\s+/g, '-')}">${inv.status}</span>
+                <span class="badge badge-${esc(inv.status.toLowerCase().replace(/\s+/g, '-'))}">${esc(inv.status)}</span>
               </td>
               <td style="text-align: right;">
                 <div style="display: inline-flex; gap: 6px;">
                   ${inv.balance_due > 0 ? `
-                    <button class="btn btn-success btn-sm btn-pay-invoice" data-id="${inv.id}" data-client-id="${inv.client_id}" title="Record Partial or Full Payment">
+                    <button class="btn btn-success btn-sm btn-pay-invoice" data-id="${esc(inv.id)}" data-client-id="${esc(inv.client_id)}" title="Record Partial or Full Payment">
                       Pay
                     </button>
                   ` : ''}
-                  <a href="/api/invoices/${inv.id}/pdf${tokenParam}" target="_blank" class="btn btn-secondary btn-sm" title="View PDF Invoice in Browser">
+                  <a href="/api/invoices/${esc(inv.id)}/pdf${tokenParam}" target="_blank" class="btn btn-secondary btn-sm" title="View PDF Invoice in Browser">
                     <svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
                     <span>View</span>
                   </a>
-                  <a href="/api/invoices/${inv.id}/pdf${tokenParam ? tokenParam + '&download=true' : '?download=true'}" target="_blank" class="btn btn-secondary btn-sm" title="Download PDF Invoice">
+                  <a href="/api/invoices/${esc(inv.id)}/pdf${tokenParam ? tokenParam + '&download=true' : '?download=true'}" target="_blank" class="btn btn-secondary btn-sm" title="Download PDF Invoice">
                     <svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
                   </a>
                   ${inv.status === 'Draft' ? `
-                    <button class="btn btn-secondary btn-sm btn-send-invoice" data-id="${inv.id}" title="Mark Sent & Dispatch Email">
+                    <button class="btn btn-secondary btn-sm btn-send-invoice" data-id="${esc(inv.id)}" title="Mark Sent & Dispatch Email">
                       Send
                     </button>
                   ` : ''}
@@ -881,29 +934,29 @@ async function renderPayments(container) {
             const tokenParam = localStorage.getItem('apex_token') ? `?token=${encodeURIComponent(localStorage.getItem('apex_token'))}` : '';
             return `
             <tr>
-              <td style="font-weight: 700; color: #16a34a;">${p.payment_number}</td>
-              <td style="color: #64748b;">${p.payment_date}</td>
-              <td style="font-weight: 600; color: #0f172a;">${p.client_name}</td>
+              <td style="font-weight: 700; color: #16a34a;">${esc(p.payment_number)}</td>
+              <td style="color: #64748b;">${esc(p.payment_date)}</td>
+              <td style="font-weight: 600; color: #0f172a;">${esc(p.client_name)}</td>
               <td>
-                ${p.invoice_number ? `<span style="font-weight: 600; color: #0284c7;">${p.invoice_number}</span>` : '<span style="color:#94a3b8;">Account Credit</span>'}
+                ${p.invoice_number ? `<span style="font-weight: 600; color: #0284c7;">${esc(p.invoice_number)}</span>` : '<span style="color:#94a3b8;">Account Credit</span>'}
               </td>
-              <td><span class="badge badge-unpaid">${p.payment_method}</span></td>
+              <td><span class="badge badge-unpaid">${esc(p.payment_method)}</span></td>
               <td style="font-weight: 700; color: #0f172a;">${formatMoney(p.amount, p.currency)}</td>
               <td style="font-weight: 600; color: #64748b;">${formatBase(p.base_currency_amount)}</td>
               <td>
-                <span class="badge badge-${p.status.toLowerCase()}">${p.status}</span>
+                <span class="badge badge-${esc(p.status.toLowerCase())}">${esc(p.status)}</span>
               </td>
               <td style="text-align: right;">
                 <div style="display: inline-flex; gap: 6px;">
-                  <button class="btn btn-secondary btn-sm btn-open-receipt" data-id="${p.id}" title="View Payment Receipt Details">
+                  <button class="btn btn-secondary btn-sm btn-open-receipt" data-id="${esc(p.id)}" title="View Payment Receipt Details">
                     <svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
                     <span>Receipt</span>
                   </button>
-                  <a href="/api/payments/${p.id}/pdf${tokenParam ? tokenParam + '&download=true' : '?download=true'}" target="_blank" class="btn btn-secondary btn-sm" title="Download Official Receipt PDF">
+                  <a href="/api/payments/${esc(p.id)}/pdf${tokenParam ? tokenParam + '&download=true' : '?download=true'}" target="_blank" class="btn btn-secondary btn-sm" title="Download Official Receipt PDF">
                     <svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
                   </a>
                   ${p.status === 'Completed' ? `
-                    <button class="btn btn-danger btn-sm btn-reverse-payment" data-id="${p.id}" title="Reverse Payment">
+                    <button class="btn btn-danger btn-sm btn-reverse-payment" data-id="${esc(p.id)}" title="Reverse Payment">
                       Reverse
                     </button>
                   ` : ''}
@@ -970,11 +1023,11 @@ async function renderClients(container) {
           ${clients.map(c => `
             <tr>
               <td>
-                <div style="font-weight: 700; color: #0f172a;">${c.company_name}</div>
-                <div style="font-size: 11px; color: #64748b;">${c.email || ''} &bull; ${c.phone || ''}</div>
+                <div style="font-weight: 700; color: #0f172a;">${esc(c.company_name)}</div>
+                <div style="font-size: 11px; color: #64748b;">${esc(c.email || '')} &bull; ${esc(c.phone || '')}</div>
               </td>
-              <td>${c.contact_person || '—'}</td>
-              <td><span class="badge badge-unpaid">${c.preferred_currency}</span></td>
+              <td>${esc(c.contact_person || '—')}</td>
+              <td><span class="badge badge-unpaid">${esc(c.preferred_currency)}</span></td>
               <td style="font-weight: 600;">${formatBase(c.total_invoiced)}</td>
               <td style="font-weight: 600; color: #16a34a;">${formatBase(c.total_paid)}</td>
               <td style="font-weight: 700; color: ${c.outstanding_balance > 0 ? '#d97706' : '#64748b'};">
@@ -985,10 +1038,10 @@ async function renderClients(container) {
               </td>
               <td style="text-align: right;">
                 <div style="display: inline-flex; gap: 6px;">
-                  <button class="btn btn-secondary btn-sm btn-view-statement" data-id="${c.id}">
+                  <button class="btn btn-secondary btn-sm btn-view-statement" data-id="${esc(c.id)}">
                     Statement
                   </button>
-                  <button class="btn btn-danger btn-sm btn-delete-client" data-id="${c.id}" data-name="${c.company_name.replace(/"/g, '&quot;')}" title="Delete Client Profile">
+                  <button class="btn btn-danger btn-sm btn-delete-client" data-id="${esc(c.id)}" data-name="${esc(c.company_name)}" title="Delete Client Profile">
                     Delete
                   </button>
                 </div>
@@ -1069,15 +1122,15 @@ async function renderExpenses(container) {
             <tr><td colspan="8" style="text-align: center; padding: 40px; color: #94a3b8;">No expenses recorded yet.</td></tr>
           ` : expenses.map(e => `
             <tr>
-              <td style="color: #64748b;">${e.expense_date}</td>
-              <td style="font-weight: 700; color: #0f172a;">${e.vendor}</td>
-              <td><span class="badge badge-draft">${e.category_name || 'General'}</span></td>
-              <td style="color: #475569;">${e.description}</td>
-              <td><span class="badge badge-unpaid">${e.payment_method}</span></td>
+              <td style="color: #64748b;">${esc(e.expense_date)}</td>
+              <td style="font-weight: 700; color: #0f172a;">${esc(e.vendor)}</td>
+              <td><span class="badge badge-draft">${esc(e.category_name || 'General')}</span></td>
+              <td style="color: #475569;">${esc(e.description)}</td>
+              <td><span class="badge badge-unpaid">${esc(e.payment_method)}</span></td>
               <td style="font-weight: 700; color: #dc2626;">${formatMoney(e.amount, e.currency)}</td>
               <td style="font-weight: 600; color: #64748b;">${formatBase(e.base_currency_amount)}</td>
               <td style="text-align: right;">
-                <button class="btn btn-danger btn-sm btn-delete-expense" data-id="${e.id}">Delete</button>
+                <button class="btn btn-danger btn-sm btn-delete-expense" data-id="${esc(e.id)}">Delete</button>
               </td>
             </tr>
           `).join('')}
@@ -1145,17 +1198,17 @@ async function renderRevenue(container) {
             <th>Description</th>
             <th>Invoice</th>
             <th>Method</th>
-            <th style="text-align: right;">Amount (${state.baseCurrency.code})</th>
+            <th style="text-align: right;">Amount (${esc(state.baseCurrency.code)})</th>
           </tr>
         </thead>
         <tbody>
           ${data.transactions.map(r => `
             <tr>
-              <td style="color: #64748b;">${r.revenue_date}</td>
-              <td style="font-weight: 600; color: #0f172a;">${r.client_name || 'Direct'}</td>
-              <td>${r.description}</td>
-              <td>${r.invoice_number ? `<span style="color:#0284c7; font-weight:600;">${r.invoice_number}</span>` : '—'}</td>
-              <td><span class="badge badge-unpaid">${r.payment_method}</span></td>
+              <td style="color: #64748b;">${esc(r.revenue_date)}</td>
+              <td style="font-weight: 600; color: #0f172a;">${esc(r.client_name || 'Direct')}</td>
+              <td>${esc(r.description)}</td>
+              <td>${r.invoice_number ? `<span style="color:#0284c7; font-weight:600;">${esc(r.invoice_number)}</span>` : '—'}</td>
+              <td><span class="badge badge-unpaid">${esc(r.payment_method)}</span></td>
               <td style="text-align: right; font-weight: 700; color: #16a34a;">${formatBase(r.base_currency_amount)}</td>
             </tr>
           `).join('')}
@@ -1226,7 +1279,7 @@ async function renderReportPnL(container) {
       <div style="border-bottom: 2px solid #0284c7; padding-bottom: 16px; margin-bottom: 24px; display: flex; justify-content: space-between;">
         <div>
           <h2 style="font-size: 20px; font-weight: 800; color: #0f172a;">PROFIT & LOSS STATEMENT</h2>
-          <div style="font-size: 12px; color: #64748b;">${state.company?.name || 'Apex Finance'} &bull; Base Currency: ${pnl.reportingCurrency}</div>
+          <div style="font-size: 12px; color: #64748b;">${esc(state.company?.name || 'Apex Finance')} &bull; Base Currency: ${esc(pnl.reportingCurrency)}</div>
         </div>
         <button onclick="window.print()" class="btn btn-secondary btn-sm">Print P&L</button>
       </div>
@@ -1236,7 +1289,7 @@ async function renderReportPnL(container) {
         <table style="width: 100%; border-collapse: collapse; font-size: 13px;">
           ${Object.entries(pnl.revenueBySource).map(([src, val]) => `
             <tr style="border-bottom: 1px solid #f1f5f9;">
-              <td style="padding: 8px 0; color: #334155;">${src}</td>
+              <td style="padding: 8px 0; color: #334155;">${esc(src)}</td>
               <td style="padding: 8px 0; text-align: right; font-weight: 600;">${formatMoney(val, pnl.reportingCurrency)}</td>
             </tr>
           `).join('')}
@@ -1252,7 +1305,7 @@ async function renderReportPnL(container) {
         <table style="width: 100%; border-collapse: collapse; font-size: 13px;">
           ${Object.entries(pnl.expenseByCategory).map(([cat, val]) => `
             <tr style="border-bottom: 1px solid #f1f5f9;">
-              <td style="padding: 8px 0; color: #334155;">${cat}</td>
+              <td style="padding: 8px 0; color: #334155;">${esc(cat)}</td>
               <td style="padding: 8px 0; text-align: right; font-weight: 600;">${formatMoney(val, pnl.reportingCurrency)}</td>
             </tr>
           `).join('')}
@@ -1266,7 +1319,7 @@ async function renderReportPnL(container) {
       <div style="background: #f8fafc; border: 2px solid #0284c7; border-radius: 12px; padding: 20px; display: flex; justify-content: space-between; align-items: center;">
         <div>
           <div style="font-size: 16px; font-weight: 800; color: #0f172a;">NET PROFIT</div>
-          <div style="font-size: 12px; color: #64748b;">Operating Margin: ${pnl.profitMargin}%</div>
+          <div style="font-size: 12px; color: #64748b;">Operating Margin: ${esc(pnl.profitMargin)}%</div>
         </div>
         <div style="font-size: 24px; font-weight: 800; color: ${pnl.netProfit >= 0 ? '#16a34a' : '#dc2626'};">
           ${formatMoney(pnl.netProfit, pnl.reportingCurrency)}
@@ -1344,17 +1397,17 @@ async function renderReportArAging(container) {
             <th>Days Overdue</th>
             <th>Aging Bucket</th>
             <th style="text-align: right;">Original Balance</th>
-            <th style="text-align: right;">Base Value (${ar.reportingCurrency})</th>
+            <th style="text-align: right;">Base Value (${esc(ar.reportingCurrency)})</th>
           </tr>
         </thead>
         <tbody>
           ${ar.invoices.map(inv => `
             <tr>
-              <td style="font-weight: 700; color: #0284c7;">${inv.invoiceNumber}</td>
-              <td style="font-weight: 600;">${inv.clientName}</td>
-              <td>${inv.dueDate}</td>
-              <td style="font-weight: 700; color: ${inv.daysOverdue > 0 ? '#dc2626' : '#16a34a'};">${inv.daysOverdue} days</td>
-              <td><span class="badge badge-${inv.daysOverdue > 0 ? 'overdue' : 'unpaid'}">${inv.bucket}</span></td>
+              <td style="font-weight: 700; color: #0284c7;">${esc(inv.invoiceNumber)}</td>
+              <td style="font-weight: 600;">${esc(inv.clientName)}</td>
+              <td>${esc(inv.dueDate)}</td>
+              <td style="font-weight: 700; color: ${inv.daysOverdue > 0 ? '#dc2626' : '#16a34a'};">${esc(inv.daysOverdue)} days</td>
+              <td><span class="badge badge-${inv.daysOverdue > 0 ? 'overdue' : 'unpaid'}">${esc(inv.bucket)}</span></td>
               <td style="text-align: right; font-weight: 600;">${formatMoney(inv.balanceDueOriginal, inv.originalCurrency)}</td>
               <td style="text-align: right; font-weight: 700; color: #0f172a;">${formatMoney(inv.balanceDueReporting, ar.reportingCurrency)}</td>
             </tr>
@@ -1378,7 +1431,7 @@ async function renderReportClientStatement(container) {
           <label class="form-label">Select Client</label>
           <select id="stmt-client-select" class="form-control">
             ${state.clients.map(c => `
-              <option value="${c.id}" ${state.selectedStatementClient === c.id ? 'selected' : ''}>${c.company_name} (${c.preferred_currency})</option>
+              <option value="${esc(c.id)}" ${state.selectedStatementClient === c.id ? 'selected' : ''}>${esc(c.company_name)} (${esc(c.preferred_currency)})</option>
             `).join('')}
           </select>
         </div>
@@ -1408,7 +1461,7 @@ async function loadStatementData() {
       <div style="border-bottom: 2px solid #0284c7; padding-bottom: 16px; margin-bottom: 24px; display: flex; justify-content: space-between;">
         <div>
           <h2 style="font-size: 22px; font-weight: 800; color: #0f172a;">ACCOUNT STATEMENT</h2>
-          <div style="font-size: 13px; color: #475569; margin-top: 4px;">Client: <strong>${stmt.client.company_name}</strong> &bull; Currency: <strong>${stmt.targetCurrency}</strong></div>
+          <div style="font-size: 13px; color: #475569; margin-top: 4px;">Client: <strong>${esc(stmt.client.company_name)}</strong> &bull; Currency: <strong>${esc(stmt.targetCurrency)}</strong></div>
         </div>
         <button onclick="window.print()" class="btn btn-secondary btn-sm">Print Statement</button>
       </div>
@@ -1436,16 +1489,16 @@ async function loadStatementData() {
             <th>Reference</th>
             <th>Description</th>
             <th style="text-align: right;">Amount</th>
-            <th style="text-align: right;">Running Balance (${state.baseCurrency.code})</th>
+            <th style="text-align: right;">Running Balance (${esc(state.baseCurrency.code)})</th>
           </tr>
         </thead>
         <tbody>
           ${stmt.ledger.map(row => `
             <tr>
-              <td>${row.date}</td>
-              <td><span class="badge badge-${row.type === 'INVOICE' ? 'unpaid' : 'completed'}">${row.type}</span></td>
-              <td style="font-weight: 600;">${row.reference}</td>
-              <td>${row.description}</td>
+              <td>${esc(row.date)}</td>
+              <td><span class="badge badge-${row.type === 'INVOICE' ? 'unpaid' : 'completed'}">${esc(row.type)}</span></td>
+              <td style="font-weight: 600;">${esc(row.reference)}</td>
+              <td>${esc(row.description)}</td>
               <td style="text-align: right; font-weight: 700; color: ${row.amount > 0 ? '#dc2626' : '#16a34a'};">
                 ${formatMoney(row.amount, row.currency)}
               </td>
@@ -1484,15 +1537,15 @@ async function renderReportTaxes(container) {
             <th>Tax Code</th>
             <th>Tax Name</th>
             <th>Rate (%)</th>
-            <th style="text-align: right;">Total Tax Collected (${state.baseCurrency.code})</th>
+            <th style="text-align: right;">Total Tax Collected (${esc(state.baseCurrency.code)})</th>
           </tr>
         </thead>
         <tbody>
           ${tax.collectedTaxes.map(t => `
             <tr>
-              <td><span class="badge badge-unpaid">${t.tax_code || 'STANDARD'}</span></td>
-              <td style="font-weight: 600;">${t.tax_name || 'Standard Tax'}</td>
-              <td>${t.percentage}%</td>
+              <td><span class="badge badge-unpaid">${esc(t.tax_code || 'STANDARD')}</span></td>
+              <td style="font-weight: 600;">${esc(t.tax_name || 'Standard Tax')}</td>
+              <td>${esc(t.percentage)}%</td>
               <td style="text-align: right; font-weight: 700; color: #16a34a;">${formatBase(t.total_tax_collected_base)}</td>
             </tr>
           `).join('')}
@@ -1519,8 +1572,8 @@ async function renderReportCurrencies(container) {
             <tbody>
               ${curr.invoicesByCurrency.map(c => `
                 <tr>
-                  <td><span class="badge badge-unpaid">${c.currency}</span></td>
-                  <td>${c.count}</td>
+                  <td><span class="badge badge-unpaid">${esc(c.currency)}</span></td>
+                  <td>${esc(c.count)}</td>
                   <td style="text-align: right; font-weight: 700;">${formatMoney(c.total_original, c.currency)}</td>
                 </tr>
               `).join('')}
@@ -1537,8 +1590,8 @@ async function renderReportCurrencies(container) {
             <tbody>
               ${curr.paymentsByCurrency.map(c => `
                 <tr>
-                  <td><span class="badge badge-completed">${c.currency}</span></td>
-                  <td>${c.count}</td>
+                  <td><span class="badge badge-completed">${esc(c.currency)}</span></td>
+                  <td>${esc(c.count)}</td>
                   <td style="text-align: right; font-weight: 700; color: #16a34a;">${formatMoney(c.total_original, c.currency)}</td>
                 </tr>
               `).join('')}
@@ -1570,7 +1623,7 @@ async function renderTemplates(container) {
         <div class="form-group">
           <label class="form-label">Select Active Template</label>
           <select id="tpl-select" class="form-control">
-            ${templates.map(t => `<option value="${t.id}">${t.name} ${t.is_default ? '(Default)' : ''}</option>`).join('')}
+            ${templates.map(t => `<option value="${esc(t.id)}">${esc(t.name)} ${t.is_default ? '(Default)' : ''}</option>`).join('')}
           </select>
         </div>
 
@@ -1666,13 +1719,13 @@ function updateLivePreview() {
 
   preview.style.fontFamily = font;
   preview.innerHTML = `
-    <div style="display: flex; justify-content: space-between; border-bottom: 2px solid ${primary}; padding-bottom: 12px; margin-bottom: 14px;">
+    <div style="display: flex; justify-content: space-between; border-bottom: 2px solid ${esc(primary)}; padding-bottom: 12px; margin-bottom: 14px;">
       <div>
-        <div style="font-size: 18px; font-weight: 800; color: ${secondary};">Apex<span style="color:${primary};">Finance</span></div>
+        <div style="font-size: 18px; font-weight: 800; color: ${esc(secondary)};">Apex<span style="color:${esc(primary)};">Finance</span></div>
         <div style="font-size: 10px; color: #64748b;">Independence Ave, Accra, Ghana</div>
       </div>
       <div style="text-align: right;">
-        <div style="font-size: 18px; font-weight: 800; color: ${primary};">INVOICE</div>
+        <div style="font-size: 18px; font-weight: 800; color: ${esc(primary)};">INVOICE</div>
         <div style="font-size: 10px; color: #64748b;">INV-2026-0099</div>
       </div>
     </div>
@@ -1688,13 +1741,13 @@ function updateLivePreview() {
         <td style="padding: 6px; border-bottom: 1px solid #f1f5f9;">Enterprise Cloud Retainer</td>
         <td style="padding: 6px; border-bottom: 1px solid #f1f5f9; text-align: right; font-weight: 600;">$10,000.00</td>
       </tr>
-      <tr style="font-weight: 800; font-size: 13px; color: ${primary};">
+      <tr style="font-weight: 800; font-size: 13px; color: ${esc(primary)};">
         <td style="padding: 8px 6px;">Total Due:</td>
         <td style="padding: 8px 6px; text-align: right;">$10,000.00</td>
       </tr>
     </table>
     <div style="font-size: 10px; color: #64748b; border-top: 1px solid #e2e8f0; padding-top: 8px;">
-      <strong>Payment Instructions:</strong> ${instructions}
+      <strong>Payment Instructions:</strong> ${esc(instructions)}
     </div>
   `;
 }
@@ -1726,16 +1779,16 @@ async function renderAuditLogs(container) {
         <tbody>
           ${logs.map(l => `
             <tr>
-              <td style="color: #64748b; white-space: nowrap;">${l.created_at}</td>
+              <td style="color: #64748b; white-space: nowrap;">${esc(l.created_at)}</td>
               <td>
-                <div style="font-weight: 600; color: #0f172a;">${l.user_name || 'System'}</div>
-                <div style="font-size: 11px; color: #64748b;">${l.user_role || 'Admin'}</div>
+                <div style="font-weight: 600; color: #0f172a;">${esc(l.user_name || 'System')}</div>
+                <div style="font-size: 11px; color: #64748b;">${esc(l.user_role || 'Admin')}</div>
               </td>
-              <td><span class="badge badge-unpaid">${l.action}</span></td>
-              <td style="font-weight: 600;">${l.entity_type}</td>
-              <td style="font-family: monospace; font-size: 11px; color: #64748b;">${l.entity_id}</td>
+              <td><span class="badge badge-unpaid">${esc(l.action)}</span></td>
+              <td style="font-weight: 600;">${esc(l.entity_type)}</td>
+              <td style="font-family: monospace; font-size: 11px; color: #64748b;">${esc(l.entity_id)}</td>
               <td>
-                <button class="btn btn-secondary btn-sm" onclick="alert(JSON.stringify(${JSON.stringify(l.new_value || l.previous_value).replace(/"/g, '&quot;')}, null, 2))">
+                <button class="btn btn-secondary btn-sm" onclick="alert(JSON.stringify(${esc(JSON.stringify(l.new_value || l.previous_value))}, null, 2))">
                   View Diff
                 </button>
               </td>
@@ -1768,26 +1821,26 @@ async function renderSettings(container) {
         <div class="form-row">
           <div class="form-group">
             <label class="form-label">Company Name *</label>
-            <input type="text" class="form-control" id="set-company-name" value="${company.name || ''}" required>
+            <input type="text" class="form-control" id="set-company-name" value="${esc(company.name || '')}" required>
           </div>
           <div class="form-group">
             <label class="form-label">Tax ID / TIN</label>
-            <input type="text" class="form-control" id="set-company-tax" value="${company.tax_identification_number || ''}">
+            <input type="text" class="form-control" id="set-company-tax" value="${esc(company.tax_identification_number || '')}">
           </div>
         </div>
 
         <div class="form-row">
           <div class="form-group">
             <label class="form-label">Official Email</label>
-            <input type="email" class="form-control" id="set-company-email" value="${company.email || ''}">
+            <input type="email" class="form-control" id="set-company-email" value="${esc(company.email || '')}">
           </div>
           <div class="form-group">
             <label class="form-label">Phone</label>
-            <input type="text" class="form-control" id="set-company-phone" value="${company.phone || ''}">
+            <input type="text" class="form-control" id="set-company-phone" value="${esc(company.phone || '')}">
           </div>
           <div class="form-group">
             <label class="form-label">Invoice Prefix</label>
-            <input type="text" class="form-control" id="set-company-prefix" value="${company.invoice_prefix || 'INV-'}">
+            <input type="text" class="form-control" id="set-company-prefix" value="${esc(company.invoice_prefix || 'INV-')}">
           </div>
         </div>
 
@@ -1796,19 +1849,19 @@ async function renderSettings(container) {
             <label class="form-label">Country</label>
             <select class="form-control" id="set-company-country">
               ${['Ghana', 'Nigeria', 'Kenya', 'South Africa', 'United States', 'United Kingdom', 'Canada', 'Germany', 'France', 'United Arab Emirates', 'Other'].map(cn => `
-                <option value="${cn}" ${(company.country || 'Ghana') === cn ? 'selected' : ''}>${cn}</option>
+                <option value="${esc(cn)}" ${(company.country || 'Ghana') === cn ? 'selected' : ''}>${esc(cn)}</option>
               `).join('')}
             </select>
           </div>
           <div class="form-group">
             <label class="form-label">Address</label>
-            <input type="text" class="form-control" id="set-company-address" value="${company.address || ''}">
+            <input type="text" class="form-control" id="set-company-address" value="${esc(company.address || '')}">
           </div>
         </div>
 
         <div class="form-group">
           <label class="form-label">Payment Instructions (Wire & Mobile Money Details)</label>
-          <textarea class="form-control" id="set-company-instructions" rows="2">${company.payment_instructions || ''}</textarea>
+          <textarea class="form-control" id="set-company-instructions" rows="2">${esc(company.payment_instructions || '')}</textarea>
         </div>
 
         <button type="submit" class="btn btn-primary">Save Company Profile</button>
@@ -1838,9 +1891,9 @@ async function renderSettings(container) {
         <tbody>
           ${currData.currencies.map(c => `
             <tr>
-              <td style="font-weight: 700; color: #0f172a;">${c.code}</td>
-              <td>${c.name}</td>
-              <td style="font-weight: 700;">${c.symbol}</td>
+              <td style="font-weight: 700; color: #0f172a;">${esc(c.code)}</td>
+              <td>${esc(c.name)}</td>
+              <td style="font-weight: 700;">${esc(c.symbol)}</td>
               <td>
                 <span class="badge ${c.is_active ? 'badge-completed' : 'badge-draft'}">${c.is_active ? 'Active' : 'Disabled'}</span>
               </td>
@@ -1849,7 +1902,7 @@ async function renderSettings(container) {
               </td>
               <td style="text-align: right;">
                 ${!c.is_base ? `
-                  <button class="btn btn-secondary btn-sm btn-set-base" data-code="${c.code}">Set as Base</button>
+                  <button class="btn btn-secondary btn-sm btn-set-base" data-code="${esc(c.code)}">Set as Base</button>
                 ` : '<span style="font-size: 11px; color:#16a34a; font-weight:700;">Default</span>'}
               </td>
             </tr>
@@ -1876,10 +1929,10 @@ async function renderSettings(container) {
         <tbody>
           ${taxes.map(t => `
             <tr>
-              <td><span class="badge badge-unpaid">${t.code}</span></td>
-              <td style="font-weight: 600; color: #0f172a;">${t.name}</td>
-              <td style="font-weight: 700;">${t.percentage}%</td>
-              <td style="color: #64748b;">${t.description}</td>
+              <td><span class="badge badge-unpaid">${esc(t.code)}</span></td>
+              <td style="font-weight: 600; color: #0f172a;">${esc(t.name)}</td>
+              <td style="font-weight: 700;">${esc(t.percentage)}%</td>
+              <td style="color: #64748b;">${esc(t.description)}</td>
               <td><span class="badge badge-completed">Active</span></td>
             </tr>
           `).join('')}
@@ -1894,7 +1947,7 @@ async function renderSettings(container) {
           <div>
             <h3 style="font-size: 16px; font-weight: 700; color: #dc2626; margin-bottom: 4px;">Danger Zone: Delete Workspace</h3>
             <p style="font-size: 12px; color: #64748b; line-height: 1.5; max-width: 600px;">
-              Permanently delete <strong>${company.name}</strong>, including all its invoices, payments, client records, and audit history. This action is irreversible.
+              Permanently delete <strong>${esc(company.name)}</strong>, including all its invoices, payments, client records, and audit history. This action is irreversible.
             </p>
           </div>
           <button id="btn-delete-workspace" class="btn btn-secondary" style="color: #dc2626; border-color: #fca5a5; background: #fee2e2; font-weight: 700;">
@@ -1992,7 +2045,7 @@ async function renderTeam(container) {
       <div>
         <h1 style="font-size: 24px; font-weight: 800; color: #0f172a; letter-spacing: -0.02em;">Company Team & Access</h1>
         <p style="font-size: 13px; color: #64748b; margin-top: 2px;">
-          Manage team members, roles, and invitation status for ${state.company?.name || 'this company'}
+          Manage team members, roles, and invitation status for ${esc(state.company?.name || 'this company')}
         </p>
       </div>
       <div>
@@ -2027,25 +2080,25 @@ async function renderTeam(container) {
                 <td>
                   <div style="display: flex; align-items: center; gap: 10px;">
                     <div style="width: 32px; height: 32px; border-radius: 50%; background: #0284c7; color: white; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 12px; flex-shrink: 0;">
-                      ${initials}
+                      ${esc(initials)}
                     </div>
                     <div>
-                      <div style="font-weight: 600; color: #0f172a;">${m.full_name} ${isSelf ? '<span class="badge badge-paid" style="font-size: 10px; margin-left: 4px;">You</span>' : ''}</div>
+                      <div style="font-weight: 600; color: #0f172a;">${esc(m.full_name)} ${isSelf ? '<span class="badge badge-paid" style="font-size: 10px; margin-left: 4px;">You</span>' : ''}</div>
                       <div style="font-size: 11px; color: #64748b;">${m.invitation_status === 'invited' ? 'Invitation pending' : 'Active team member'}</div>
                     </div>
                   </div>
                 </td>
-                <td>${m.email}</td>
+                <td>${esc(m.email)}</td>
                 <td>
                   ${isAdmin && !isSelf ? `
-                    <select class="form-control change-role-select" data-user-id="${m.id}" style="width: 160px; font-size: 12px; padding: 4px 8px;">
+                    <select class="form-control change-role-select" data-user-id="${esc(m.id)}" style="width: 160px; font-size: 12px; padding: 4px 8px;">
                       <option value="Administrator" ${m.role_name === 'Administrator' ? 'selected' : ''}>Administrator</option>
                       <option value="Finance Manager" ${m.role_name === 'Finance Manager' ? 'selected' : ''}>Finance Manager</option>
                       <option value="Staff" ${m.role_name === 'Staff' ? 'selected' : ''}>Staff</option>
                     </select>
                   ` : `
                     <span class="badge ${m.role_name === 'Administrator' ? 'badge-overdue' : m.role_name === 'Finance Manager' ? 'badge-completed' : 'badge-draft'}">
-                      ${m.role_name}
+                      ${esc(m.role_name)}
                     </span>
                   `}
                 </td>
@@ -2060,7 +2113,7 @@ async function renderTeam(container) {
                 ${isAdmin ? `
                   <td style="text-align: right;">
                     ${!isSelf ? `
-                      <button class="btn btn-secondary btn-sm btn-remove-member" data-user-id="${m.id}" style="color: #ef4444; border-color: #fecaca;" title="Remove Member">
+                      <button class="btn btn-secondary btn-sm btn-remove-member" data-user-id="${esc(m.id)}" style="color: #ef4444; border-color: #fecaca;" title="Remove Member">
                         Remove
                       </button>
                     ` : '<span style="font-size: 11px; color: #94a3b8;">Workspace Owner</span>'}
@@ -2157,11 +2210,11 @@ async function renderPlatform(container) {
       </div>
       <div class="stat-card" style="background: white; border: 1px solid var(--border); border-radius: 12px; padding: 20px;">
         <div style="font-size: 12px; font-weight: 700; color: #16a34a; text-transform: uppercase;">Active Companies</div>
-        <div style="font-size: 28px; font-weight: 800; color: #16a34a; margin-top: 6px;">${activeCount}</div>
+        <div style="font-size: 28px; font-weight: 800; color: #16a34a; margin-top: 6px;">${esc(activeCount)}</div>
       </div>
       <div class="stat-card" style="background: white; border: 1px solid var(--border); border-radius: 12px; padding: 20px;">
         <div style="font-size: 12px; font-weight: 700; color: #ef4444; text-transform: uppercase;">Suspended Companies</div>
-        <div style="font-size: 28px; font-weight: 800; color: #ef4444; margin-top: 6px;">${suspendedCount}</div>
+        <div style="font-size: 28px; font-weight: 800; color: #ef4444; margin-top: 6px;">${esc(suspendedCount)}</div>
       </div>
     </div>
 
@@ -2184,28 +2237,28 @@ async function renderPlatform(container) {
           ${companies.map(c => `
             <tr>
               <td>
-                <div style="font-weight: 700; color: #0f172a;">${c.name}</div>
-                <div style="font-size: 11px; color: #64748b; font-family: monospace;">${c.id}</div>
+                <div style="font-weight: 700; color: #0f172a;">${esc(c.name)}</div>
+                <div style="font-size: 11px; color: #64748b; font-family: monospace;">${esc(c.id)}</div>
               </td>
-              <td>${c.legal_name || '—'}</td>
-              <td><span class="badge badge-unpaid">${c.default_currency}</span></td>
-              <td><span class="badge badge-draft" style="text-transform: capitalize;">${c.subscription_plan || 'standard'}</span></td>
+              <td>${esc(c.legal_name || '—')}</td>
+              <td><span class="badge badge-unpaid">${esc(c.default_currency)}</span></td>
+              <td><span class="badge badge-draft" style="text-transform: capitalize;">${esc(c.subscription_plan || 'standard')}</span></td>
               <td>
                 <span class="badge ${c.status === 'active' ? 'badge-completed' : 'badge-overdue'}">
-                  ${c.status}
+                  ${esc(c.status)}
                 </span>
               </td>
-              <td style="font-weight: 600;">${c.member_count || 1}</td>
-              <td style="font-weight: 600;">${c.invoice_count || 0}</td>
+              <td style="font-weight: 600;">${esc(c.member_count || 1)}</td>
+              <td style="font-weight: 600;">${esc(c.invoice_count || 0)}</td>
               <td style="text-align: right;">
                 <div style="display: inline-flex; gap: 8px;">
-                  <button class="btn btn-secondary btn-sm btn-platform-switch" data-company-id="${c.id}" title="Switch context to this company">
+                  <button class="btn btn-secondary btn-sm btn-platform-switch" data-company-id="${esc(c.id)}" title="Switch context to this company">
                     Enter &rarr;
                   </button>
-                  <button class="btn btn-secondary btn-sm btn-toggle-status" data-company-id="${c.id}" data-current-status="${c.status}" style="color: ${c.status === 'active' ? '#ef4444' : '#16a34a'}; border-color: ${c.status === 'active' ? '#fecaca' : '#bbf7d0'};">
+                  <button class="btn btn-secondary btn-sm btn-toggle-status" data-company-id="${esc(c.id)}" data-current-status="${esc(c.status)}" style="color: ${c.status === 'active' ? '#ef4444' : '#16a34a'}; border-color: ${c.status === 'active' ? '#fecaca' : '#bbf7d0'};">
                     ${c.status === 'active' ? 'Suspend' : 'Activate'}
                   </button>
-                  <button class="btn btn-secondary btn-sm btn-delete-platform-company" data-company-id="${c.id}" data-name="${c.name}" style="color: #dc2626; border-color: #fca5a5; background: #fee2e2;" title="Permanently delete company">
+                  <button class="btn btn-secondary btn-sm btn-delete-platform-company" data-company-id="${esc(c.id)}" data-name="${esc(c.name)}" style="color: #dc2626; border-color: #fca5a5; background: #fee2e2;" title="Permanently delete company">
                     Delete
                   </button>
                 </div>
@@ -2299,7 +2352,7 @@ async function openCreateInvoiceModal() {
 
   // Populate Clients
   const clientSel = document.getElementById('inv-client');
-  clientSel.innerHTML = clients.map(c => `<option value="${c.id}" data-currency="${c.preferred_currency}">${c.company_name} (${c.preferred_currency})</option>`).join('');
+  clientSel.innerHTML = clients.map(c => `<option value="${esc(c.id)}" data-currency="${esc(c.preferred_currency)}">${esc(c.company_name)} (${esc(c.preferred_currency)})</option>`).join('');
 
   // Default currency: Company base currency or selected client's preferred currency
   const baseDefault = state.company?.default_currency || state.baseCurrency?.code || 'GHS';
@@ -2307,11 +2360,11 @@ async function openCreateInvoiceModal() {
 
   // Populate Currencies
   const currSel = document.getElementById('inv-currency');
-  currSel.innerHTML = currData.currencies.map(c => `<option value="${c.code}" ${c.code === initialPreferred ? 'selected' : ''}>${c.code} — ${c.name}</option>`).join('');
+  currSel.innerHTML = currData.currencies.map(c => `<option value="${esc(c.code)}" ${c.code === initialPreferred ? 'selected' : ''}>${esc(c.code)} — ${esc(c.name)}</option>`).join('');
 
   // Populate Templates
   const tplSel = document.getElementById('inv-template');
-  tplSel.innerHTML = templates.map(t => `<option value="${t.id}">${t.name}</option>`).join('');
+  tplSel.innerHTML = templates.map(t => `<option value="${esc(t.id)}">${esc(t.name)}</option>`).join('');
 
   // Set default dates
   const today = new Date().toISOString().slice(0, 10);
@@ -2372,18 +2425,19 @@ function addInvoiceLineItem(desc = '', qty = 1, price = 0, taxId = '') {
   div.style.cssText = 'display: grid; grid-template-columns: 3fr 1fr 1.5fr 1.5fr 1fr 30px; gap: 8px; margin-bottom: 10px; align-items: center;';
 
   div.innerHTML = `
-    <input type="text" class="form-control item-desc" placeholder="Service / Item Description" value="${desc}" required>
-    <input type="number" step="0.01" class="form-control item-qty" placeholder="Qty" value="${qty}" required min="0.01">
-    <input type="number" step="0.01" class="form-control item-price" placeholder="Unit Price" value="${price}" required min="0">
+    <input type="text" class="form-control item-desc" placeholder="Service / Item Description" value="${esc(desc)}" required>
+    <input type="number" step="0.01" class="form-control item-qty" placeholder="Qty" value="${esc(qty)}" required min="0.01">
+    <input type="number" step="0.01" class="form-control item-price" placeholder="Unit Price" value="${esc(price)}" required min="0">
     <select class="form-control item-tax">
       <option value="">No Tax (0%)</option>
-      ${state.taxRates.map(t => `<option value="${t.id}" data-pct="${t.percentage}">${t.name} (${t.percentage}%)</option>`).join('')}
+      ${state.taxRates.map(t => `<option value="${esc(t.id)}" data-pct="${esc(t.percentage)}">${esc(t.name)} (${esc(t.percentage)}%)</option>`).join('')}
     </select>
     <input type="text" class="form-control item-line-total" style="background: #f1f5f9; font-weight: 700; text-align: right;" readonly value="$0.00">
     <button type="button" class="btn btn-secondary btn-sm btn-remove-item" style="padding: 4px 8px; color: #dc2626;">&times;</button>
   `;
 
   container.appendChild(div);
+  if (taxId) div.querySelector('.item-tax').value = taxId;
 
   div.querySelectorAll('input, select').forEach(el => el.addEventListener('input', recalculateInvoiceSummary));
   div.querySelector('.btn-remove-item').addEventListener('click', () => {
@@ -2401,36 +2455,47 @@ function recalculateInvoiceSummary() {
   const exchangeRate = parseFloat(document.getElementById('inv-rate')?.value) || 1.0;
   const rows = document.querySelectorAll('.invoice-line-row');
 
-  let subtotal = 0;
-  let totalTax = 0;
-
-  rows.forEach(row => {
+  // Mirrors InvoiceService.computeInvoiceTotals: amounts are rounded to the currency's
+  // precision, the invoice discount is spread across lines in proportion to their value
+  // (last line takes the rounding remainder), and tax is charged on the discounted amount.
+  const precision = state.currencies.find(c => c.code === currencyCode)?.decimal_precision ?? 2;
+  const round = v => {
+    const f = Math.pow(10, precision);
+    return Math.sign(v) * Math.round((Math.abs(v) + Number.EPSILON) * f) / f;
+  };
+  const lines = Array.from(rows).map(row => {
     const qty = parseFloat(row.querySelector('.item-qty').value) || 0;
     const price = parseFloat(row.querySelector('.item-price').value) || 0;
     const taxSelect = row.querySelector('.item-tax');
     const taxPct = taxSelect.selectedIndex > 0 ? parseFloat(taxSelect.options[taxSelect.selectedIndex].dataset.pct) || 0 : 0;
-
-    const lineRaw = qty * price;
-    const lineTax = (lineRaw * taxPct) / 100;
-    const lineTotal = lineRaw + lineTax;
-
-    row.querySelector('.item-line-total').value = formatMoney(lineTotal, currencyCode);
-
-    subtotal += lineRaw;
-    totalTax += lineTax;
+    return { row, raw: round(qty * price), taxPct };
   });
+  const subtotal = round(lines.reduce((sum, l) => sum + l.raw, 0));
 
   const discType = document.getElementById('inv-discount-type').value;
   const discVal = parseFloat(document.getElementById('inv-discount-val').value) || 0;
   let discountAmount = 0;
 
   if (discType === 'percent' && discVal > 0) {
-    discountAmount = (subtotal * discVal) / 100;
+    discountAmount = round((subtotal * Math.min(discVal, 100)) / 100);
   } else if (discType === 'fixed' && discVal > 0) {
-    discountAmount = Math.min(discVal, subtotal);
+    discountAmount = round(Math.min(discVal, subtotal));
   }
 
-  const grandTotal = Math.max(0, subtotal - discountAmount + totalTax);
+  let totalTax = 0;
+  let allocated = 0;
+  lines.forEach((l, i) => {
+    let discountShare = 0;
+    if (discountAmount > 0 && subtotal > 0) {
+      discountShare = i === lines.length - 1 ? round(discountAmount - allocated) : round((l.raw / subtotal) * discountAmount);
+      allocated = round(allocated + discountShare);
+    }
+    const lineTax = round(((l.raw - discountShare) * l.taxPct) / 100);
+    totalTax = round(totalTax + lineTax);
+    l.row.querySelector('.item-line-total').value = formatMoney(l.raw + lineTax, currencyCode);
+  });
+
+  const grandTotal = Math.max(0, round(subtotal - discountAmount + totalTax));
   const baseTotal = grandTotal * exchangeRate;
 
   document.getElementById('summary-subtotal').innerText = formatMoney(subtotal, currencyCode);
@@ -2510,16 +2575,16 @@ async function loadPaymentNotes() {
     }
 
     select.innerHTML = '<option value="">-- Load Saved Note --</option>' +
-      notes.map(n => `<option value="${n.id}" data-content="${encodeURIComponent(n.content)}" data-split="${n.split_ratio ?? ''}">📝 ${n.title}</option>`).join('');
+      notes.map(n => `<option value="${esc(n.id)}" data-content="${encodeURIComponent(n.content)}" data-split="${esc(n.split_ratio ?? '')}">📝 ${esc(n.title)}</option>`).join('');
 
     container.innerHTML = notes.map(n => {
       const splitBadge = n.split_ratio ? `(${Math.round(n.split_ratio * 100)}%) ` : '';
       return `
         <span class="btn-pay-preset-wrap" style="display: inline-flex; align-items: center; border-radius: 12px; background: #f0fdf4; border: 1px solid #bbf7d0; padding: 2px 8px; font-size: 11px;">
-          <button type="button" class="btn-pay-preset-action" data-note="${encodeURIComponent(n.content)}" data-split="${n.split_ratio ?? ''}" style="background: none; border: none; padding: 0; color: #15803d; font-weight: 600; cursor: pointer; font-size: 11px;">
-            📝 ${splitBadge}${n.title}
+          <button type="button" class="btn-pay-preset-action" data-note="${encodeURIComponent(n.content)}" data-split="${esc(n.split_ratio ?? '')}" style="background: none; border: none; padding: 0; color: #15803d; font-weight: 600; cursor: pointer; font-size: 11px;">
+            📝 ${splitBadge}${esc(n.title)}
           </button>
-          <span class="btn-delete-saved-note" data-id="${n.id}" data-title="${n.title}" title="Delete this saved note" style="margin-left: 6px; cursor: pointer; color: #ef4444; font-weight: bold; font-size: 13px; line-height: 1;">&times;</span>
+          <span class="btn-delete-saved-note" data-id="${esc(n.id)}" data-title="${esc(n.title)}" title="Delete this saved note" style="margin-left: 6px; cursor: pointer; color: #ef4444; font-weight: bold; font-size: 13px; line-height: 1;">&times;</span>
         </span>
       `;
     }).join('');
@@ -2588,7 +2653,7 @@ async function openRecordPaymentModal(options = {}) {
   await loadPaymentNotes();
 
   const clientSel = document.getElementById('pay-client');
-  clientSel.innerHTML = clients.map(c => `<option value="${c.id}">${c.company_name}</option>`).join('');
+  clientSel.innerHTML = clients.map(c => `<option value="${esc(c.id)}">${esc(c.company_name)}</option>`).join('');
 
   if (options.clientId) clientSel.value = options.clientId;
 
@@ -2609,8 +2674,8 @@ async function openRecordPaymentModal(options = {}) {
     }
 
     invSel.innerHTML = eligible.map(i => `
-      <option value="${i.id}" data-total="${i.total_amount}" data-balance="${i.balance_due}" data-paid="${i.amount_paid}" data-currency="${i.currency || baseFallback}" data-due="${i.due_date}">
-        ${i.invoice_number} — Total: ${formatMoney(i.total_amount, i.currency || baseFallback)} | Balance Due: ${formatMoney(i.balance_due, i.currency || baseFallback)}
+      <option value="${esc(i.id)}" data-total="${esc(i.total_amount)}" data-balance="${esc(i.balance_due)}" data-paid="${esc(i.amount_paid)}" data-currency="${esc(i.currency || baseFallback)}" data-due="${esc(i.due_date)}">
+        ${esc(i.invoice_number)} — Total: ${formatMoney(i.total_amount, i.currency || baseFallback)} | Balance Due: ${formatMoney(i.balance_due, i.currency || baseFallback)}
       </option>
     `).join('');
 
@@ -2683,7 +2748,7 @@ function updatePaymentProgressSimulation() {
 
   const preview = document.getElementById('pay-progress-preview');
   preview.style.display = 'block';
-  document.getElementById('pay-progress-fill').style.width = `${pct}%`;
+  document.getElementById('pay-progress-fill').style.width = `${esc(pct)}%`;
   document.getElementById('pay-percent-text').innerText = `${pct}% Settled`;
   document.getElementById('pay-remaining-note').innerText = `After this payment: ${formatMoney(newTotalPaid, curr)} Paid / Remaining Balance: ${formatMoney(newBalance, curr)}`;
 
@@ -2759,30 +2824,30 @@ async function openReceiptModal(paymentId) {
           <div style="font-size: 26px; font-weight: 800; color: #15803d; margin-top: 2px;">
             ${formatMoney(payment.amount, payment.currency)}
           </div>
-          <div style="font-size: 11px; color: #64748b; margin-top: 2px;">Date: ${payment.payment_date}</div>
+          <div style="font-size: 11px; color: #64748b; margin-top: 2px;">Date: ${esc(payment.payment_date)}</div>
         </div>
         <div style="text-align: right;">
           <div style="font-size: 11px; text-transform: uppercase; color: #64748b; font-weight: 600;">Payer / Client</div>
-          <div style="font-size: 15px; font-weight: 700; color: #0f172a;">${payment.client_name || 'Client'}</div>
-          ${payment.invoice_number ? `<div style="font-size: 12px; color: #0284c7; font-weight: 600; margin-top: 3px;">Invoice: ${payment.invoice_number}</div>` : ''}
+          <div style="font-size: 15px; font-weight: 700; color: #0f172a;">${esc(payment.client_name || 'Client')}</div>
+          ${payment.invoice_number ? `<div style="font-size: 12px; color: #0284c7; font-weight: 600; margin-top: 3px;">Invoice: ${esc(payment.invoice_number)}</div>` : ''}
         </div>
       </div>
 
       <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 18px; font-size: 12px;">
         <div style="background: #f8fafc; padding: 12px; border-radius: 8px; border: 1px solid #e2e8f0;">
           <div style="color: #64748b; margin-bottom: 2px;">Payment Method</div>
-          <div style="font-weight: 700; color: #0f172a;">${payment.payment_method || 'Bank Transfer'}</div>
+          <div style="font-weight: 700; color: #0f172a;">${esc(payment.payment_method || 'Bank Transfer')}</div>
         </div>
         <div style="background: #f8fafc; padding: 12px; border-radius: 8px; border: 1px solid #e2e8f0;">
           <div style="color: #64748b; margin-bottom: 2px;">Reference / Txn #</div>
-          <div style="font-weight: 700; color: #0f172a;">${payment.reference_number || '—'}</div>
+          <div style="font-weight: 700; color: #0f172a;">${esc(payment.reference_number || '—')}</div>
         </div>
       </div>
 
       ${payment.notes ? `
         <div style="background: #fffbeb; border: 1px solid #fef3c7; border-radius: 8px; padding: 12px; margin-bottom: 18px;">
           <div style="font-size: 11px; font-weight: 700; color: #b45309; text-transform: uppercase; margin-bottom: 4px;">Payment Remarks / Notes</div>
-          <div style="font-size: 12px; color: #92400e;">${payment.notes}</div>
+          <div style="font-size: 12px; color: #92400e;">${esc(payment.notes)}</div>
         </div>
       ` : ''}
 
@@ -2825,7 +2890,7 @@ document.getElementById('btn-confirm-reversal').addEventListener('click', async 
 async function openAddClientModal() {
   const currSel = document.getElementById('client-currency');
   const baseDefault = state.company?.default_currency || state.baseCurrency?.code || 'GHS';
-  currSel.innerHTML = state.currencies.map(c => `<option value="${c.code}" ${c.code === baseDefault ? 'selected' : ''}>${c.code} (${c.symbol})</option>`).join('');
+  currSel.innerHTML = state.currencies.map(c => `<option value="${esc(c.code)}" ${c.code === baseDefault ? 'selected' : ''}>${esc(c.code)} (${esc(c.symbol)})</option>`).join('');
   document.getElementById('modal-client').classList.add('open');
 }
 
@@ -2878,10 +2943,10 @@ document.getElementById('btn-confirm-delete-client').addEventListener('click', a
 async function openAddExpenseModal() {
   const catSel = document.getElementById('exp-category');
   const categories = await api('/expenses/categories');
-  catSel.innerHTML = categories.map(c => `<option value="${c.id}">${c.name}</option>`).join('');
+  catSel.innerHTML = categories.map(c => `<option value="${esc(c.id)}">${esc(c.name)}</option>`).join('');
 
   const currSel = document.getElementById('exp-currency');
-  currSel.innerHTML = state.currencies.map(c => `<option value="${c.code}" ${c.code === state.baseCurrency.code ? 'selected' : ''}>${c.code} (${c.symbol})</option>`).join('');
+  currSel.innerHTML = state.currencies.map(c => `<option value="${esc(c.code)}" ${c.code === state.baseCurrency.code ? 'selected' : ''}>${esc(c.code)} (${esc(c.symbol)})</option>`).join('');
 
   document.getElementById('exp-date').value = new Date().toISOString().slice(0, 10);
   document.getElementById('modal-expense').classList.add('open');
@@ -2934,12 +2999,12 @@ function setupSearch() {
           dropdown.innerHTML = '<div style="padding: 16px; font-size: 13px; color: #94a3b8; text-align: center;">No matches found</div>';
         } else {
           dropdown.innerHTML = data.results.map(r => `
-            <div class="search-item" data-type="${r.type}" data-id="${r.id}" style="padding: 10px 16px; border-bottom: 1px solid #f1f5f9; cursor: pointer; display: flex; align-items: center; justify-content: space-between;">
+            <div class="search-item" data-type="${esc(r.type)}" data-id="${esc(r.id)}" style="padding: 10px 16px; border-bottom: 1px solid #f1f5f9; cursor: pointer; display: flex; align-items: center; justify-content: space-between;">
               <div>
-                <div style="font-weight: 600; font-size: 13px; color: #0f172a;">${r.title}</div>
-                <div style="font-size: 11px; color: #64748b;">${r.subtitle || ''}</div>
+                <div style="font-weight: 600; font-size: 13px; color: #0f172a;">${esc(r.title)}</div>
+                <div style="font-size: 11px; color: #64748b;">${esc(r.subtitle || '')}</div>
               </div>
-              <span class="badge badge-unpaid">${r.type}</span>
+              <span class="badge badge-unpaid">${esc(r.type)}</span>
             </div>
           `).join('');
 
@@ -2988,9 +3053,9 @@ async function loadNotifications() {
       ? '<div style="padding: 20px; text-align: center; color: #94a3b8; font-size: 12px;">No notifications</div>'
       : notifications.map(n => `
         <div style="padding: 12px 16px; border-bottom: 1px solid #f1f5f9; ${n.is_read ? 'opacity: 0.6;' : 'background: #f8fafc;'}; font-size: 12px;">
-          <div style="font-weight: 700; color: #0f172a;">${n.title}</div>
-          <div style="color: #475569; margin-top: 2px;">${n.message}</div>
-          <div style="font-size: 10px; color: #94a3b8; margin-top: 4px;">${n.created_at}</div>
+          <div style="font-weight: 700; color: #0f172a;">${esc(n.title)}</div>
+          <div style="color: #475569; margin-top: 2px;">${esc(n.message)}</div>
+          <div style="font-size: 10px; color: #94a3b8; margin-top: 4px;">${esc(n.created_at)}</div>
         </div>
       `).join('');
   } catch (err) {
