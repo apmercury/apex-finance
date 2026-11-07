@@ -4,7 +4,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as url from 'node:url';
 import { handleApiRequest } from './routes/api.ts';
-import { initializeDatabase } from './db/bootstrap.ts';
+import { seedDemoData } from './db/seed.ts';
 import { getJwtSecret } from './utils/security.ts';
 import { InvoiceService } from './services/invoiceService.ts';
 
@@ -30,6 +30,18 @@ const MIME_TYPES: Record<string, string> = {
 
 // Create schema, then demo data (demo mode) or the first admin (production)
 initializeDatabase();
+
+// Flip past-due invoices to Overdue now and hourly (status otherwise only changes on payment)
+function runOverdueSweep() {
+  try {
+    const count = InvoiceService.refreshOverdueStatuses();
+    if (count > 0) console.log(`[Scheduler] Marked ${count} invoice(s) as Overdue`);
+  } catch (e) {
+    console.error('[Scheduler] Overdue sweep failed:', e);
+  }
+}
+runOverdueSweep();
+setInterval(runOverdueSweep, 60 * 60 * 1000).unref();
 
 // Flip past-due invoices to Overdue now and hourly (status otherwise only changes on payment)
 function runOverdueSweep() {

@@ -24,15 +24,6 @@ import { SearchService } from '../services/searchService.ts';
 import { sseService } from '../services/sseService.ts';
 import { EmailService } from '../services/emailService.ts';
 import { FailureLimiter } from '../utils/rateLimit.ts';
-import { isDemoMode } from '../db/bootstrap.ts';
-
-// Seeded demo personas (see db/seed.ts). Only ever sent to clients when demo mode is on.
-const DEMO_ACCOUNTS = [
-  { email: 'admin@apexfin.com', password: 'admin123', label: '⚡ Alexander (Admin)', subtitle: 'Apex Tech • GHS', color: '#0284c7' },
-  { email: 'finance@apexfin.com', password: 'finance123', label: '💼 Kofi Mensah', subtitle: 'Finance Mgr • GHS', color: '#16a34a' },
-  { email: 'sarah@stellarmaritime.com', password: 'sarah123', label: '🚢 Sarah Jenkins', subtitle: 'Director • Stellar (USD)', color: '#0d9488' },
-  { email: 'staff@apexfin.com', password: 'staff123', label: '📝 Ama Osei', subtitle: 'Staff Member', color: '#64748b' }
-];
 import { hashPassword } from '../utils/security.ts';
 
 // Helper to read JSON body
@@ -92,15 +83,10 @@ const loginFailuresByAccount = new FailureLimiter(5, 15 * 60 * 1000);
 const loginFailuresByIp = new FailureLimiter(30, 15 * 60 * 1000);
 
 function clientIp(req: IncomingMessage): string {
-  // Only trust X-Forwarded-For when running behind a known reverse proxy (TRUST_PROXY=true).
-  // Use the LAST entry: it is the address our own proxy saw. Earlier entries are whatever
-  // the client sent and can be forged to dodge the login rate limiter.
+  // Only trust X-Forwarded-For when running behind a known reverse proxy
   if (process.env.TRUST_PROXY === 'true') {
     const fwd = req.headers['x-forwarded-for'];
-    if (typeof fwd === 'string' && fwd) {
-      const hops = fwd.split(',').map(h => h.trim()).filter(Boolean);
-      if (hops.length) return hops[hops.length - 1];
-    }
+    if (typeof fwd === 'string' && fwd) return fwd.split(',')[0].trim();
   }
   return req.socket.remoteAddress || 'unknown';
 }
