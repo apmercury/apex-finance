@@ -13,6 +13,14 @@ The app runs as **one Docker container** (Node 22 + Chromium for PDFs) behind **
 
 ## First deployment
 
+On a server with 2 GB of RAM or less, first add a swap file. It's a safety margin if Chromium briefly needs more memory while rendering a PDF:
+
+```bash
+sudo fallocate -l 2G /swapfile && sudo chmod 600 /swapfile
+sudo mkswap /swapfile && sudo swapon /swapfile
+echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
+```
+
 ```bash
 # On the VPS (Ubuntu/Debian)
 curl -fsSL https://get.docker.com | sh            # installs Docker + the compose plugin
