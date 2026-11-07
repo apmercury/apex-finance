@@ -3282,15 +3282,27 @@ function setupEventListeners() {
     });
   }
 
-  document.querySelectorAll('.demo-account-chip').forEach(chip => {
-    chip.addEventListener('click', async () => {
-      const email = chip.dataset.email;
-      const pass = chip.dataset.pass;
-      document.getElementById('login-email').value = email;
-      document.getElementById('login-password').value = pass;
-      await performLogin(email, pass);
-    });
-  });
+  // One-click demo logins exist only when the server runs in demo mode
+  fetch('/api/public-config')
+    .then(r => (r.ok ? r.json() : null))
+    .then(cfg => {
+      if (!cfg || !cfg.demoMode || !Array.isArray(cfg.demoAccounts)) return;
+      const list = document.getElementById('demo-logins-list');
+      list.innerHTML = cfg.demoAccounts.map(a => `
+        <button type="button" class="demo-account-chip" data-email="${esc(a.email)}" data-pass="${esc(a.password)}">
+          <span style="font-weight: 700; font-size: 12px; color: ${esc(a.color)};">${esc(a.label)}</span>
+          <span style="font-size: 10px; color: #64748b;">${esc(a.subtitle)}</span>
+        </button>`).join('');
+      list.querySelectorAll('.demo-account-chip').forEach(chip => {
+        chip.addEventListener('click', async () => {
+          document.getElementById('login-email').value = chip.dataset.email;
+          document.getElementById('login-password').value = chip.dataset.pass;
+          await performLogin(chip.dataset.email, chip.dataset.pass);
+        });
+      });
+      document.getElementById('demo-logins').style.display = 'block';
+    })
+    .catch(() => {});
 
   // Logout Handlers
   const handleLogout = () => {

@@ -396,6 +396,20 @@ export function seedDemoData() {
 
 export function seedPermissionsAndSecondCompany() {
   // 1. Roles & Permissions
+  seedRolesAndPermissions();
+  const roles = queryAll(`SELECT id, name FROM roles`);
+  const adminRole = roles.find(r => r.name === 'Administrator');
+  const financeRole = roles.find(r => r.name === 'Finance Manager');
+  const staffRole = roles.find(r => r.name === 'Staff');
+
+  seedSecondDemoCompany(adminRole, financeRole, staffRole);
+}
+
+/**
+ * Built-in roles and their permissions. Needed in every environment (production included);
+ * idempotent, so it is safe to run on every startup.
+ */
+export function seedRolesAndPermissions() {
   const roles = queryAll(`SELECT id, name FROM roles`);
   let adminRole = roles.find(r => r.name === 'Administrator');
   let financeRole = roles.find(r => r.name === 'Finance Manager');
@@ -458,7 +472,9 @@ export function seedPermissionsAndSecondCompany() {
       execute(`INSERT OR IGNORE INTO role_permissions (role_id, permission_id) VALUES (?, ?)`, [staffRole.id, permId]);
     }
   }
+}
 
+function seedSecondDemoCompany(adminRole: any, financeRole: any, staffRole: any) {
   // 2. Check Second Company
   const comp2Id = 'comp_stellar_02';
   const existingComp2 = queryOne(`SELECT id FROM companies WHERE id = ?`, [comp2Id]);

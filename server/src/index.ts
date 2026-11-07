@@ -4,7 +4,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as url from 'node:url';
 import { handleApiRequest } from './routes/api.ts';
-import { seedDemoData } from './db/seed.ts';
+import { initializeDatabase } from './db/bootstrap.ts';
 import { getJwtSecret } from './utils/security.ts';
 import { InvoiceService } from './services/invoiceService.ts';
 
@@ -28,8 +28,8 @@ const MIME_TYPES: Record<string, string> = {
   '.woff2': 'font/woff2'
 };
 
-// Seed initial database if needed
-seedDemoData();
+// Create schema, then demo data (demo mode) or the first admin (production)
+initializeDatabase();
 
 // Flip past-due invoices to Overdue now and hourly (status otherwise only changes on payment)
 function runOverdueSweep() {

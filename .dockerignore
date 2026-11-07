@@ -1,0 +1,14 @@
+# Keep the build context small and free of secrets and local data
+.git
+.github
+node_modules
+storage
+backups
+tests
+.env
+.env.*
+*.sqlite*
+repomix-output.xml
+.DS_Store
+Thumbs.db
+deploy/*.md

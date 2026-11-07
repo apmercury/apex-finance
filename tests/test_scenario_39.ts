@@ -1,3 +1,4 @@
+import { seedDemoData } from '../server/src/db/seed.ts';
 import { ClientService } from '../server/src/services/clientService.ts';
 import { InvoiceService } from '../server/src/services/invoiceService.ts';
 import { PaymentService } from '../server/src/services/paymentService.ts';
@@ -15,6 +16,9 @@ function assert(condition: boolean, msg: string) {
   }
   console.log(`PASS: ${msg}`);
 }
+
+// Self-contained: create the schema and demo companies when run on an empty database
+seedDemoData();
 
 const companyId = 'comp_apex_01';
 console.log('=== RUNNING SECTION 39 CRITICAL TEST SCENARIO ===\n');

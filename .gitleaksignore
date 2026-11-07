@@ -1,0 +1,3 @@
+# Reviewed false positives. Format: <commit>:<file>:<rule>:<line>
+# Throwaway JWT secret used only by the Docker smoke test container (since replaced by a random value at run time).
+b54f1841d374ee793c34b92d3609efd17aa15075:deploy/smoke-test.sh:generic-api-key:25

@@ -1,0 +1,42 @@
+# Production stack: the app plus Caddy for automatic HTTPS.
+#   1. cp .env.example .env   and fill in DOMAIN, JWT_SECRET, ADMIN_EMAIL, SMTP_*
+#   2. docker compose up -d --build
+#   3. docker compose logs app   (shows the first admin's temporary password on first start)
+# Run exactly ONE app replica: SQLite, live updates and the login rate limiter are per process.
+services:
+  app:
+    build: .
+    image: apex-finance:latest
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      NODE_ENV: production
+      HOST: 0.0.0.0
+      PORT: 3000
+      TRUST_PROXY: "true"   # requests arrive through Caddy
+    volumes:
+      - app-storage:/app/storage
+    expose:
+      - "3000"
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    depends_on:
+      app:
+        condition: service_healthy
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      DOMAIN: ${DOMAIN:?Set DOMAIN in .env (e.g. finance.example.com)}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+
+volumes:
+  app-storage:
+  caddy-data:
+  caddy-config:
