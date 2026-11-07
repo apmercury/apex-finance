@@ -22,7 +22,7 @@ pass() { echo "PASS: $*"; }
 docker build -t "$IMAGE" .
 cleanup
 docker run -d --name "$NAME" -p "${PORT}:3000" \
-  -e JWT_SECRET="smoke-test-secret-0123456789abcdefghijklmnop" \
+  -e JWT_SECRET="$(openssl rand -hex 32)" \
   -e ADMIN_EMAIL="$ADMIN_EMAIL" -e ADMIN_PASSWORD="$BOOT_PW" \
   -e ADMIN_COMPANY_NAME="Smoke Test Ltd" -e ADMIN_COMPANY_CURRENCY=USD \
   "$IMAGE" >/dev/null
